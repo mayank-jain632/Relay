@@ -1,0 +1,91 @@
+{
+  "name": "contexthud",
+  "displayName": "ContextHUD",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Slack-to-IDE prioritized task HUD",
+  "main": "./dist/extension.js",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "activationEvents": [
+    "onStartupFinished",
+    "onView:contexthud.sidebar"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "contexthud",
+          "title": "ContextHUD",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "contexthud": [
+        {
+          "id": "contexthud.sidebar",
+          "name": "My Priority Queue",
+          "type": "webview"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "contexthud.refresh",
+        "title": "ContextHUD: Refresh"
+      }
+    ],
+    "configuration": {
+      "title": "ContextHUD",
+      "properties": {
+        "contexthud.currentUser": {
+          "type": "string",
+          "default": "",
+          "description": "Local/GitHub username used for private task filtering."
+        },
+        "contexthud.userMappingPath": {
+          "type": "string",
+          "default": ".contexthud/users.json",
+          "description": "Workspace-relative JSON mapping of Slack user IDs to local usernames."
+        },
+        "contexthud.apiBaseUrl": {
+          "type": "string",
+          "default": "http://localhost:8787",
+          "description": "Backend API base URL for task reads/completions."
+        },
+        "contexthud.socketUrl": {
+          "type": "string",
+          "default": "http://localhost:8787",
+          "description": "Socket endpoint for real-time updates."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "watch": "tsc -w -p .",
+    "test": "npm run test:server && npm run build",
+    "test:server": "node --test server/test/*.test.js",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
+    "db:migrate": "node server/scripts/migrate.js",
+    "server:start": "node server/server.js"
+  },
+  "dependencies": {
+    "@slack/web-api": "^7.8.0",
+    "docker": "^1.0.0",
+    "express": "^4.21.2",
+    "pg": "^8.18.0",
+    "postgres": "^3.4.8",
+    "socket.io": "^4.8.1",
+    "socket.io-client": "^4.8.1",
+    "uuid": "^11.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.8",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^5.7.3"
+  }
+}

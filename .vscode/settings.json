@@ -1,0 +1,6 @@
+{
+  "contexthud.currentUser": "mayankjain",
+  "contexthud.userMappingPath": ".contexthud/users.json",
+  "contexthud.apiBaseUrl": "http://localhost:8787",
+  "contexthud.socketUrl": "http://localhost:8787"
+}

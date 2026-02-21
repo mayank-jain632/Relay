@@ -1,0 +1,4 @@
+.vscode/**
+server/**
+**/*.test.*
+**/tsconfig.json
