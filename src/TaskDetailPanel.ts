@@ -2,7 +2,18 @@ import * as vscode from 'vscode';
 import { Task } from './shared/types';
 
 interface DetailMessage {
-  type: 'requestTask' | 'startTask' | 'setStatus' | 'savePatch' | 'openPr' | 'openCommit';
+  type:
+    | 'requestTask'
+    | 'startTask'
+    | 'setStatus'
+    | 'savePatch'
+    | 'openPr'
+    | 'viewCommitDiff'
+    | 'viewTaskDiff'
+    | 'openChangedFile'
+    | 'openAllChangedFiles'
+    | 'addCurrentFileToTask'
+    | 'copyFileList';
   status?: Task['status'];
   title?: string;
   description?: string;
@@ -10,6 +21,7 @@ interface DetailMessage {
   linkedFiles?: string;
   autoCloseOnMerge?: boolean;
   sha?: string;
+  filePath?: string;
 }
 
 interface TaskApi {
@@ -17,7 +29,12 @@ interface TaskApi {
   patchTask: (taskId: string, patch: Record<string, unknown>) => Promise<Task>;
   startTask: (taskId: string) => Promise<Task>;
   openPr: (taskId: string) => Promise<void>;
-  openCommit: (sha: string) => Promise<void>;
+  viewCommitDiff: (sha: string) => Promise<void>;
+  viewTaskDiffForTask: (taskId: string) => Promise<void>;
+  openChangedFile: (taskId: string, filePath: string) => Promise<void>;
+  openAllChangedFiles: (taskId: string) => Promise<void>;
+  addCurrentFileToTask: (taskId: string) => Promise<void>;
+  copyFileList: (taskId: string) => Promise<void>;
 }
 
 export class TaskDetailPanel {
@@ -100,8 +117,34 @@ export class TaskDetailPanel {
       return;
     }
 
-    if (message.type === 'openCommit' && message.sha) {
-      await this.api.openCommit(message.sha);
+    if (message.type === 'viewTaskDiff') {
+      await this.api.viewTaskDiffForTask(this.taskId);
+      return;
+    }
+
+    if (message.type === 'viewCommitDiff' && message.sha) {
+      await this.api.viewCommitDiff(message.sha);
+      return;
+    }
+
+    if (message.type === 'openChangedFile' && message.filePath) {
+      await this.api.openChangedFile(this.taskId, message.filePath);
+      return;
+    }
+
+    if (message.type === 'openAllChangedFiles') {
+      await this.api.openAllChangedFiles(this.taskId);
+      return;
+    }
+
+    if (message.type === 'addCurrentFileToTask') {
+      await this.api.addCurrentFileToTask(this.taskId);
+      await this.afterMutation();
+      return;
+    }
+
+    if (message.type === 'copyFileList') {
+      await this.api.copyFileList(this.taskId);
     }
   }
 
@@ -126,26 +169,25 @@ export class TaskDetailPanel {
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     body { font-family: "IBM Plex Sans", "Segoe UI", sans-serif; margin: 0; padding: 16px; color: var(--vscode-editor-foreground); background: var(--vscode-editor-background); }
-    .grid { display: grid; gap: 10px; max-width: 900px; }
+    .grid { display: grid; gap: 10px; max-width: 980px; }
     input, textarea { width: 100%; box-sizing: border-box; background: var(--vscode-input-background); color: var(--vscode-input-foreground); border: 1px solid var(--vscode-input-border); border-radius: 6px; padding: 8px; }
     textarea { min-height: 90px; }
     .row { display: flex; gap: 8px; flex-wrap: wrap; }
     button { border: 1px solid #2f9c90; background: #214741; color: #d6fff8; border-radius: 6px; padding: 6px 10px; cursor: pointer; }
     button:hover { background: #2a5c54; }
-    .label { font-size: 12px; opacity: 0.8; }
+    .label { font-size: 12px; opacity: 0.85; }
     .block { border: 1px solid var(--vscode-panel-border); border-radius: 8px; padding: 10px; }
-    ul { margin-top: 6px; }
-    .commit-link { cursor: pointer; color: #8be6dc; text-decoration: underline; }
+    ul { margin-top: 6px; margin-bottom: 0; }
+    .commit-line, .file-line { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+    .file-path { font-family: var(--vscode-editor-font-family, monospace); font-size: 12px; }
+    .muted { opacity: 0.8; font-size: 12px; }
     .status { display: flex; align-items: center; gap: 8px; font-size: 12px; opacity: 0.95; }
     .status-badge { border-radius: 999px; padding: 3px 10px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; }
     .status-todo { background: rgba(72, 158, 255, 0.2); color: #b7ddff; border: 1px solid rgba(72, 158, 255, 0.45); }
     .status-in-progress { background: rgba(227, 191, 64, 0.2); color: #ffe8a4; border: 1px solid rgba(227, 191, 64, 0.45); }
     .status-blocked { background: rgba(219, 72, 72, 0.2); color: #ffc2c2; border: 1px solid rgba(219, 72, 72, 0.5); }
-    .status-review { background: rgba(171, 113, 255, 0.2); color: #e3ccff; border: 1px solid rgba(171, 113, 255, 0.5); }
     .status-done { background: rgba(79, 194, 114, 0.22); color: #bff7d0; border: 1px solid rgba(79, 194, 114, 0.45); }
     button.active { border-color: #f5f7f9; box-shadow: 0 0 0 2px rgba(245, 247, 249, 0.35) inset; }
-    .check-row { display: flex; align-items: center; gap: 8px; }
-    .check-row input { width: auto; }
   </style>
 </head>
 <body>
@@ -159,6 +201,7 @@ export class TaskDetailPanel {
       <button data-status="review">Review</button>
       <button data-status="done">Done</button>
       <button id="openPr">Open PR</button>
+      <button id="viewTaskDiff">View Task Diff</button>
     </div>
 
     <div>
@@ -189,6 +232,16 @@ export class TaskDetailPanel {
     <div><button id="save">Save Changes</button></div>
 
     <div class="block">
+      <div class="label">Changed Files</div>
+      <div class="row" style="margin-top: 6px;">
+        <button id="openAllChangedFiles">Open all changed files</button>
+        <button id="addCurrentFileToTask">Add current file to task</button>
+        <button id="copyFileList">Copy file list</button>
+      </div>
+      <ul id="changedFiles"></ul>
+    </div>
+
+    <div class="block">
       <div class="label">Commits</div>
       <ul id="commits"></ul>
     </div>
@@ -204,6 +257,10 @@ export class TaskDetailPanel {
 
     document.getElementById('start').addEventListener('click', () => vscode.postMessage({ type: 'startTask' }));
     document.getElementById('openPr').addEventListener('click', () => vscode.postMessage({ type: 'openPr' }));
+    document.getElementById('viewTaskDiff').addEventListener('click', () => vscode.postMessage({ type: 'viewTaskDiff' }));
+    document.getElementById('openAllChangedFiles').addEventListener('click', () => vscode.postMessage({ type: 'openAllChangedFiles' }));
+    document.getElementById('addCurrentFileToTask').addEventListener('click', () => vscode.postMessage({ type: 'addCurrentFileToTask' }));
+    document.getElementById('copyFileList').addEventListener('click', () => vscode.postMessage({ type: 'copyFileList' }));
     document.getElementById('save').addEventListener('click', () => {
       vscode.postMessage({
         type: 'savePatch',
@@ -228,7 +285,6 @@ export class TaskDetailPanel {
         todo: 'status-todo',
         in_progress: 'status-in-progress',
         blocked: 'status-blocked',
-        review: 'status-review',
         done: 'status-done'
       };
 
@@ -243,22 +299,50 @@ export class TaskDetailPanel {
       });
     }
 
+    function renderChangedFiles(files) {
+      const node = document.getElementById('changedFiles');
+      if (!Array.isArray(files) || files.length === 0) {
+        node.innerHTML = '<li class="muted">No changed files linked yet.</li>';
+        return;
+      }
+
+      node.innerHTML = files.map((file) => {
+        return [
+          '<li class="file-line">',
+          '  <span class="file-path">' + file + '</span>',
+          '  <button data-file="' + file.replaceAll('&', '&amp;').replaceAll('"', '&quot;') + '">Open</button>',
+          '</li>'
+        ].join('');
+      }).join('');
+
+      node.querySelectorAll('button[data-file]').forEach((el) => {
+        el.addEventListener('click', () => {
+          vscode.postMessage({ type: 'openChangedFile', filePath: el.getAttribute('data-file') });
+        });
+      });
+    }
+
     function renderCommits(commits) {
       const node = document.getElementById('commits');
       if (!Array.isArray(commits) || commits.length === 0) {
-        node.innerHTML = '<li>No commits linked yet.</li>';
+        node.innerHTML = '<li class="muted">No commits linked yet.</li>';
         return;
       }
 
       node.innerHTML = commits.map((c) => {
         const shortSha = (c.sha || '').slice(0, 7);
         const date = c.date ? new Date(c.date).toLocaleString() : '';
-        return '<li><span class="commit-link" data-sha="' + c.sha + '">' + shortSha + '</span> · ' + (c.message || '') + ' · ' + date + '</li>';
+        return [
+          '<li class="commit-line">',
+          '  <span><strong>' + shortSha + '</strong> · ' + (c.message || '') + ' · ' + date + '</span>',
+          '  <button data-sha="' + (c.sha || '') + '">View Diff</button>',
+          '</li>'
+        ].join('');
       }).join('');
 
-      node.querySelectorAll('.commit-link').forEach((el) => {
+      node.querySelectorAll('button[data-sha]').forEach((el) => {
         el.addEventListener('click', () => {
-          vscode.postMessage({ type: 'openCommit', sha: el.getAttribute('data-sha') });
+          vscode.postMessage({ type: 'viewCommitDiff', sha: el.getAttribute('data-sha') });
         });
       });
     }
@@ -271,8 +355,8 @@ export class TaskDetailPanel {
       description.value = task.description || '';
       linkedFiles.value = Array.isArray(task.linkedFiles) ? task.linkedFiles.join(', ') : '';
       branchName.value = task.branchName || '';
-      autoCloseOnMerge.checked = Boolean(task.autoCloseOnMerge);
       setActiveStatus(task.status);
+      renderChangedFiles(task.linkedFiles || []);
       renderCommits(task.commits || []);
     });
 

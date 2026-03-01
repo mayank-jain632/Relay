@@ -17,51 +17,51 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
 
-function normalizeKey(value) {
-  return String(value || '')
-    .trim()
-    .replace(/^@/, '')
-    .toLowerCase();
-}
-
 function formatStatus(status) {
   return String(status || 'todo').replace('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function buildStatusMessage(task) {
   const assignee = task.assignee_id ? `@${task.assignee_id}` : 'assignee';
-  const status = String(task.status || 'todo');
-  const statusLabel = formatStatus(status);
+  const statusLabel = formatStatus(task.status);
   const branchPart = task.branchName ? ` (branch: ${task.branchName})` : '';
-  const prPart = task.prUrl ? `\nPR: ${task.prUrl}` : '';
 
-  if (status === 'in_progress') {
-    return `🟦 ContextHUD: ${assignee} started this task -> ${statusLabel}${branchPart}${prPart}`;
+  if (task.status === 'in_progress') {
+    return `🟦 ContextHUD: ${assignee} started this task -> ${statusLabel}${branchPart}`;
   }
 
-  if (status === 'review') {
-    return `🟨 ContextHUD: PR opened -> ${statusLabel}${branchPart}${prPart}`;
+  if (task.status === 'review') {
+    return `🟨 ContextHUD: PR opened -> ${statusLabel}${branchPart}`;
   }
 
-  if (status === 'done') {
-    return `✅ ContextHUD: Marked ${statusLabel}${branchPart}${prPart}`;
+  if (task.status === 'done') {
+    return `✅ ContextHUD: Marked ${statusLabel}${branchPart}`;
   }
 
-  if (status === 'blocked') {
-    return `⛔ ContextHUD: Status updated -> ${statusLabel}${branchPart}${prPart}`;
+  if (task.status === 'blocked') {
+    return `⛔ ContextHUD: Status updated -> ${statusLabel}${branchPart}`;
   }
 
-  return `🔄 ContextHUD: Status updated -> ${statusLabel}${branchPart}${prPart}`;
+  return `🔄 ContextHUD: Status updated -> ${statusLabel}${branchPart}`;
 }
 
-async function postStatusToSlackThread(task) {
+async function postStatusToSlack(task) {
   const token = String(process.env.SLACK_BOT_TOKEN || '').trim();
   if (!token) {
     return null;
   }
 
-  if (!task.slackChannelId || !task.slackThreadTs) {
+  if (!task.slackChannelId) {
     return null;
+  }
+
+  const payload = {
+    channel: task.slackChannelId,
+    text: buildStatusMessage(task)
+  };
+
+  if (task.slackThreadTs) {
+    payload.thread_ts = task.slackThreadTs;
   }
 
   try {
@@ -71,33 +71,25 @@ async function postStatusToSlackThread(task) {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json; charset=utf-8'
       },
-      body: JSON.stringify({
-        channel: task.slackChannelId,
-        thread_ts: task.slackThreadTs,
-        text: buildStatusMessage(task)
-      })
+      body: JSON.stringify(payload)
     });
 
-    const payload = await response.json();
-    if (!response.ok || !payload.ok) {
-      const reason = payload?.error || `HTTP ${response.status}`;
-      console.error('[ContextHUD] Slack post failed:', reason);
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      const reason = result?.error || `HTTP ${response.status}`;
+      console.error('[ContextHUD] Slack status post failed:', reason);
       return `Slack status update failed: ${reason}`;
     }
 
     return null;
   } catch (error) {
-    console.error('[ContextHUD] Slack post failed:', error);
+    console.error('[ContextHUD] Slack status post failed:', error);
     return `Slack status update failed: ${String(error.message || error)}`;
   }
 }
 
-function resolveAssigneeForPayload(parsed, payload) {
-  const configuredHandle = String(process.env.CONTEXTHUD_USER_HANDLE || '').trim();
-  const normalizedToken = normalizeKey(parsed.assigneeRef);
-  const normalizedSender = normalizeKey(payload.user_name || payload.user_id);
-  const normalizedConfiguredHandle = normalizeKey(configuredHandle);
-
+function ingestSlackPayload(payload) {
+  const parsed = parseSlackTaskText(payload.text || '');
   let assignee = resolveAssignee(parsed.assigneeRef);
 
   if (!assignee && normalizedConfiguredHandle && normalizedToken === normalizedConfiguredHandle) {
@@ -201,11 +193,9 @@ app.patch('/tasks/:id', async (req, res) => {
     const body = req.body || {};
     const allowed = Object.fromEntries(
       Object.entries({
-        autoCloseOnMerge: body.autoCloseOnMerge,
         branchName: body.branchName,
         description: body.description,
         linkedFiles: body.linkedFiles,
-        prUrl: body.prUrl,
         priority: body.priority,
         status: body.status,
         title: body.title
@@ -218,9 +208,8 @@ app.patch('/tasks/:id', async (req, res) => {
     }
 
     let warning;
-    const statusChanged = Boolean(body.status) && before.status !== task.status;
-    if (statusChanged) {
-      warning = await postStatusToSlackThread(task);
+    if (allowed.status && before.status !== task.status) {
+      warning = await postStatusToSlack(task);
     }
 
     return res.json({ ok: true, task, warning: warning || undefined });

@@ -76,6 +76,28 @@ export async function showCommit(repoRoot: string, sha: string): Promise<string>
   return runGit(['show', sha], repoRoot);
 }
 
+export async function showCommitDiff(repoRoot: string, sha: string): Promise<string> {
+  try {
+    return await runGit(['diff', `${sha}^!`], repoRoot);
+  } catch {
+    return showCommit(repoRoot, sha);
+  }
+}
+
+export async function getChangedFilesForCommit(repoRoot: string, sha: string): Promise<string[]> {
+  let output = '';
+  try {
+    output = await runGit(['diff-tree', '--no-commit-id', '--name-only', '-r', sha], repoRoot);
+  } catch {
+    output = await runGit(['show', '--name-only', '--pretty=', sha], repoRoot);
+  }
+
+  return output
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 export async function getRemoteOriginUrl(repoRoot: string): Promise<string> {
   return runGit(['remote', 'get-url', 'origin'], repoRoot);
 }
@@ -111,4 +133,12 @@ export function buildGitHubCompareUrl(remote: string, baseBranch: string, branch
   }
 
   return `https://github.com/${parsed.owner}/${parsed.repo}/compare/${encodeURIComponent(baseBranch)}...${encodeURIComponent(branchName)}?expand=1`;
+}
+
+export async function showTaskDiff(repoRoot: string, baseBranch: string, branchName: string): Promise<string> {
+  try {
+    return await runGit(['diff', `origin/${baseBranch}...${branchName}`], repoRoot);
+  } catch {
+    return runGit(['diff', `${baseBranch}...${branchName}`], repoRoot);
+  }
 }

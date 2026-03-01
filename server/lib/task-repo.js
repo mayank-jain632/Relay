@@ -9,6 +9,42 @@ function safeJsonParse(text, fallback) {
   }
 }
 
+function normalizeLinkedFiles(value) {
+  if (Array.isArray(value)) {
+    const out = [];
+    const seen = new Set();
+    for (const entry of value) {
+      const item = String(entry || '').trim();
+      if (!item) {
+        continue;
+      }
+      const key = item.toLowerCase();
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      out.push(item);
+    }
+    return out;
+  }
+
+  if (typeof value === 'string') {
+    const raw = value.trim();
+    if (!raw) {
+      return [];
+    }
+
+    const parsed = safeJsonParse(raw, null);
+    if (Array.isArray(parsed)) {
+      return normalizeLinkedFiles(parsed);
+    }
+
+    return normalizeLinkedFiles(raw.split(/[\n,]/g));
+  }
+
+  return [];
+}
+
 function mapTask(row) {
   if (!row) {
     return null;
@@ -28,7 +64,7 @@ function mapTask(row) {
     slackUserId: row.slack_user_id,
     slackChannelId: row.slack_channel_id,
     slackThreadTs: row.slack_thread_ts,
-    linkedFiles: safeJsonParse(row.linked_files, []),
+    linkedFiles: normalizeLinkedFiles(safeJsonParse(row.linked_files, row.linked_files || '[]')),
     branchName: row.branch_name,
     prUrl: row.pr_url,
     autoCloseOnMerge: Boolean(row.auto_close_on_merge),
@@ -90,7 +126,7 @@ function createTask(input) {
     input.slackUserId || null,
     input.slackChannelId || null,
     input.slackThreadTs || null,
-    JSON.stringify(input.linkedFiles || []),
+    JSON.stringify(normalizeLinkedFiles(input.linkedFiles || [])),
     input.branchName || null,
     input.prUrl || null,
     input.autoCloseOnMerge ? 1 : 0,
@@ -124,12 +160,13 @@ function patchTask(id, patch) {
   const next = {
     ...existing,
     ...definedPatch,
-    linkedFiles: definedPatch.linkedFiles ?? existing.linkedFiles,
+    linkedFiles: definedPatch.linkedFiles !== undefined
+      ? normalizeLinkedFiles(definedPatch.linkedFiles)
+      : existing.linkedFiles,
     commits: definedPatch.commits ?? existing.commits,
     ai_acceptance_criteria: definedPatch.ai_acceptance_criteria ?? existing.ai_acceptance_criteria,
     ai_open_questions: definedPatch.ai_open_questions ?? existing.ai_open_questions,
-    ai_tags: definedPatch.ai_tags ?? existing.ai_tags,
-    autoCloseOnMerge: definedPatch.autoCloseOnMerge ?? existing.autoCloseOnMerge
+    ai_tags: definedPatch.ai_tags ?? existing.ai_tags
   };
 
   run(
@@ -143,7 +180,7 @@ function patchTask(id, patch) {
     next.status,
     next.priority || null,
     next.dueDate || null,
-    JSON.stringify(next.linkedFiles || []),
+    JSON.stringify(normalizeLinkedFiles(next.linkedFiles || [])),
     next.branchName || null,
     next.prUrl || null,
     next.autoCloseOnMerge ? 1 : 0,
