@@ -4,7 +4,7 @@ import { Task } from './shared/types';
 import { getCurrentUser } from './shared/userMap';
 import { getWorkspaceRelativePath, normalizeFilePath, prioritizeByFile, sortByOrder } from './shared/taskUtils';
 import { TaskDetailPanel } from './TaskDetailPanel';
-import { addTaskCommit, fetchTaskList, getTaskById, patchTask, summarizeTask } from './api/client';
+import { addTaskCommit, fetchTaskList, getTaskById, patchTask as patchTaskRequest, summarizeTask } from './api/client';
 import {
   buildBranchName,
   buildGitHubCompareUrl,
@@ -37,7 +37,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       taskId,
       {
         getTaskById,
-        patchTask,
+        patchTask: async (id, patch) => {
+          const updated = await patchTaskRequest(id, patch);
+          if (typeof patch.status === 'string') {
+            const label = patch.status.replace('_', ' ');
+            void vscode.window.showInformationMessage(`Task status set to `);
+          }
+          return updated;
+        },
         summarizeTask,
         startTask,
         openPr,
@@ -122,13 +129,14 @@ async function refreshTasks(sidebar: SidebarProvider): Promise<void> {
 
   try {
     const data = await fetchTaskList();
-    const active = data.tasks.filter((task) => task.status !== 'done');
 
     const privateFiltered = configuredUser
-      ? active.filter((task) => sameIdentity(task.assignee_id, configuredUser))
-      : active;
+      ? data.tasks.filter((task) => sameIdentity(task.assignee_id, configuredUser))
+      : data.tasks;
 
-    currentTasks = sortByOrder(privateFiltered);
+    const pending = sortByOrder(privateFiltered.filter((task) => task.status !== 'done'));
+    const completed = sortByOrder(privateFiltered.filter((task) => task.status === 'done'));
+    currentTasks = [...pending, ...completed];
     sidebar.updateTasks(currentTasks);
   } catch (error) {
     vscode.window.showErrorMessage(`ContextHUD failed to fetch tasks: ${String(error)}`);
@@ -152,7 +160,7 @@ async function startTask(taskId: string): Promise<Task> {
   const branchName = buildBranchName(prefix || 'ch', task.id, task.title || task.description);
 
   const result = await checkoutOrCreateBranch(repoRoot, branchName);
-  const updated = await patchTask(taskId, {
+  const updated = await patchTaskRequest(taskId, {
     branchName,
     status: 'in_progress'
   });
