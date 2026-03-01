@@ -1,5 +1,12 @@
 export type TaskStatus = 'todo' | 'in_progress' | 'blocked' | 'done';
 
+export interface TaskCommit {
+  sha: string;
+  message: string;
+  author: string;
+  date: string;
+}
+
 export interface Task {
   id: string;
   assignee_id: string;
@@ -13,6 +20,7 @@ export interface Task {
   sourceUrl?: string | null;
   linkedFiles: string[];
   branchName?: string | null;
+  commits?: TaskCommit[];
   ai_title?: string | null;
   ai_summary?: string | null;
   ai_acceptance_criteria?: string[];

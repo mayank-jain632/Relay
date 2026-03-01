@@ -2,18 +2,22 @@ import * as vscode from 'vscode';
 import { Task } from './shared/types';
 
 interface DetailMessage {
-  type: 'requestTask' | 'startTask' | 'setStatus' | 'openSlack' | 'askAi' | 'savePatch';
+  type: 'requestTask' | 'startTask' | 'setStatus' | 'askAi' | 'savePatch' | 'openPr' | 'openCommit';
   status?: Task['status'];
   title?: string;
   description?: string;
   branchName?: string;
   linkedFiles?: string;
+  sha?: string;
 }
 
 interface TaskApi {
   getTaskById: (taskId: string) => Promise<Task>;
   patchTask: (taskId: string, patch: Record<string, unknown>) => Promise<Task>;
   summarizeTask: (taskId: string) => Promise<Task>;
+  startTask: (taskId: string) => Promise<Task>;
+  openPr: (taskId: string) => Promise<void>;
+  openCommit: (sha: string) => Promise<void>;
 }
 
 export class TaskDetailPanel {
@@ -35,14 +39,13 @@ export class TaskDetailPanel {
       { enableScripts: true }
     );
 
-    const instance = new TaskDetailPanel(panel, context, taskId, api, onTaskChanged);
+    const instance = new TaskDetailPanel(panel, taskId, api, onTaskChanged);
     TaskDetailPanel.panels.set(taskId, instance);
     void instance.refresh();
   }
 
   private constructor(
     private readonly panel: vscode.WebviewPanel,
-    private readonly context: vscode.ExtensionContext,
     private readonly taskId: string,
     private readonly api: TaskApi,
     private readonly onTaskChanged: () => Promise<void>
@@ -59,7 +62,7 @@ export class TaskDetailPanel {
     }
 
     if (message.type === 'startTask') {
-      await this.api.patchTask(this.taskId, { status: 'in_progress' });
+      await this.api.startTask(this.taskId);
       await this.afterMutation();
       return;
     }
@@ -92,13 +95,13 @@ export class TaskDetailPanel {
       return;
     }
 
-    if (message.type === 'openSlack') {
-      const task = await this.api.getTaskById(this.taskId);
-      if (task.sourceUrl) {
-        await vscode.env.openExternal(vscode.Uri.parse(task.sourceUrl));
-      } else {
-        vscode.window.showInformationMessage('No Slack thread URL found for this task.');
-      }
+    if (message.type === 'openPr') {
+      await this.api.openPr(this.taskId);
+      return;
+    }
+
+    if (message.type === 'openCommit' && message.sha) {
+      await this.api.openCommit(message.sha);
     }
   }
 
@@ -132,6 +135,7 @@ export class TaskDetailPanel {
     .label { font-size: 12px; opacity: 0.8; }
     .block { border: 1px solid var(--vscode-panel-border); border-radius: 8px; padding: 10px; }
     ul { margin-top: 6px; }
+    .commit-link { cursor: pointer; color: #8be6dc; text-decoration: underline; }
   </style>
 </head>
 <body>
@@ -142,7 +146,7 @@ export class TaskDetailPanel {
       <button data-status="in_progress">In Progress</button>
       <button data-status="blocked">Blocked</button>
       <button data-status="done">Done</button>
-      <button id="openSlack">Open Slack Thread</button>
+      <button id="openPr">Open PR</button>
       <button id="askAi">Ask AI</button>
     </div>
 
@@ -169,6 +173,11 @@ export class TaskDetailPanel {
     <div><button id="save">Save Changes</button></div>
 
     <div class="block">
+      <div class="label">Commits</div>
+      <ul id="commits"></ul>
+    </div>
+
+    <div class="block">
       <div class="label">AI Summary</div>
       <p id="aiSummary">No summary yet.</p>
       <div class="label">Acceptance Criteria</div>
@@ -188,7 +197,7 @@ export class TaskDetailPanel {
     const branchName = document.getElementById('branchName');
 
     document.getElementById('start').addEventListener('click', () => vscode.postMessage({ type: 'startTask' }));
-    document.getElementById('openSlack').addEventListener('click', () => vscode.postMessage({ type: 'openSlack' }));
+    document.getElementById('openPr').addEventListener('click', () => vscode.postMessage({ type: 'openPr' }));
     document.getElementById('askAi').addEventListener('click', () => vscode.postMessage({ type: 'askAi' }));
     document.getElementById('save').addEventListener('click', () => {
       vscode.postMessage({
@@ -213,6 +222,26 @@ export class TaskDetailPanel {
       node.innerHTML = values.map((v) => '<li>' + v + '</li>').join('');
     }
 
+    function renderCommits(commits) {
+      const node = document.getElementById('commits');
+      if (!Array.isArray(commits) || commits.length === 0) {
+        node.innerHTML = '<li>No commits linked yet.</li>';
+        return;
+      }
+
+      node.innerHTML = commits.map((c) => {
+        const shortSha = (c.sha || '').slice(0, 7);
+        const date = c.date ? new Date(c.date).toLocaleString() : '';
+        return '<li><span class="commit-link" data-sha="' + c.sha + '">' + shortSha + '</span> · ' + (c.message || '') + ' · ' + date + '</li>';
+      }).join('');
+
+      node.querySelectorAll('.commit-link').forEach((el) => {
+        el.addEventListener('click', () => {
+          vscode.postMessage({ type: 'openCommit', sha: el.getAttribute('data-sha') });
+        });
+      });
+    }
+
     window.addEventListener('message', (event) => {
       const task = event.data?.task;
       if (!task) return;
@@ -225,6 +254,7 @@ export class TaskDetailPanel {
       setList('aiCriteria', task.ai_acceptance_criteria || []);
       setList('aiQuestions', task.ai_open_questions || []);
       document.getElementById('aiTags').textContent = (task.ai_tags || []).join(', ') || '-';
+      renderCommits(task.commits || []);
     });
 
     vscode.postMessage({ type: 'requestTask' });

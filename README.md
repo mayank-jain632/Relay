@@ -1,6 +1,7 @@
-# ContextHUD (Phase 0)
+# Relay (Phase 0)
 
 Local PM-to-developer workflow system with:
+
 - Slack ingestion (`POST /ingest/slack`)
 - SQLite as system of record
 - VS Code sidebar list + task detail editor webview
@@ -31,17 +32,21 @@ Then in VS Code run `Run Extension` (F5) and open ContextHUD.
   - Stores AI-style structured fields (`ai_title`, `ai_summary`, `ai_acceptance_criteria`, `ai_open_questions`, `ai_tags`)
 
 Compatibility:
+
 - `POST /slack/nudge` still supported and routed to ingest behavior.
 
 ## Storage
 
 SQLite file path:
+
 - `server/data/contexthud.db`
 
 Schema file:
+
 - `server/sql/init.sql`
 
 Tables:
+
 - `tasks`
 - `task_links`
 - `task_comments`
@@ -60,6 +65,7 @@ Tables:
 ## Slack Text Conventions
 
 Examples:
+
 - `@mayank [task] Fix login redirect on mobile safari — callback state mismatch`
 - `@mayank [task] Add retry logic #priority:high #due:2026-03-10 file:src/api/client.ts`
 

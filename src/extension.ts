@@ -1,25 +1,47 @@
 import * as vscode from 'vscode';
 import { SidebarProvider } from './SidebarProvider';
-import { Task, TaskDetailResponse, TaskListResponse } from './shared/types';
+import { Task } from './shared/types';
 import { getCurrentUser } from './shared/userMap';
 import { getWorkspaceRelativePath, normalizeFilePath, prioritizeByFile, sortByOrder } from './shared/taskUtils';
 import { TaskDetailPanel } from './TaskDetailPanel';
+import { addTaskCommit, fetchTaskList, getTaskById, patchTask, summarizeTask } from './api/client';
+import {
+  buildBranchName,
+  buildGitHubCompareUrl,
+  checkoutOrCreateBranch,
+  detectBaseBranch,
+  getCurrentBranch,
+  getHeadSha,
+  getRemoteOriginUrl,
+  getRepoRoot,
+  readCommit,
+  showCommit
+} from './git/git';
+import { getActiveTaskId, setActiveTaskId } from './state/activeTask';
 
 let currentTasks: Task[] = [];
-let pollHandle: NodeJS.Timeout | undefined;
+let refreshPollHandle: NodeJS.Timeout | undefined;
+let commitPollHandle: NodeJS.Timeout | undefined;
+const lastSeenCommitByTask = new Map<string, string>();
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const sidebar = new SidebarProvider();
   context.subscriptions.push(vscode.window.registerWebviewViewProvider(SidebarProvider.viewType, sidebar));
 
+  maybeShowSecondarySidebarOnboarding(context);
+
   sidebar.setOnOpenTask((taskId) => {
+    void setActiveTaskId(context.workspaceState, taskId);
     TaskDetailPanel.open(
       context,
       taskId,
       {
         getTaskById,
         patchTask,
-        summarizeTask
+        summarizeTask,
+        startTask,
+        openPr,
+        openCommit
       },
       async () => {
         await refreshTasks(sidebar);
@@ -55,23 +77,44 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   await refreshTasks(sidebar);
 
-  pollHandle = setInterval(() => {
+  refreshPollHandle = setInterval(() => {
     void refreshTasks(sidebar);
   }, 5000);
 
+  startCommitLinkPolling(context, sidebar);
+
   context.subscriptions.push({
     dispose: () => {
-      if (pollHandle) {
-        clearInterval(pollHandle);
+      if (refreshPollHandle) {
+        clearInterval(refreshPollHandle);
+      }
+      if (commitPollHandle) {
+        clearInterval(commitPollHandle);
       }
     }
   });
 }
 
 export function deactivate(): void {
-  if (pollHandle) {
-    clearInterval(pollHandle);
+  if (refreshPollHandle) {
+    clearInterval(refreshPollHandle);
   }
+  if (commitPollHandle) {
+    clearInterval(commitPollHandle);
+  }
+}
+
+function maybeShowSecondarySidebarOnboarding(context: vscode.ExtensionContext): void {
+  const key = 'contexthud.onboarding.secondarySidebar.v1';
+  const seen = context.globalState.get<boolean>(key, false);
+  if (seen) {
+    return;
+  }
+
+  void context.globalState.update(key, true);
+  void vscode.window.showInformationMessage(
+    'Relay tip: move ContextHUD to the right side. Right-click the ContextHUD view title -> Move View -> Secondary Side Bar.'
+  );
 }
 
 async function refreshTasks(sidebar: SidebarProvider): Promise<void> {
@@ -102,73 +145,104 @@ function sameIdentity(a: string, b: string): boolean {
   return normalizeIdentity(a) === normalizeIdentity(b);
 }
 
-async function fetchTaskList(): Promise<TaskListResponse> {
-  const url = buildApiUrl('/tasks');
-  const response = await fetch(url);
+async function startTask(taskId: string): Promise<Task> {
+  const task = await getTaskById(taskId);
+  const repoRoot = await getRepoRoot();
+  const prefix = vscode.workspace.getConfiguration('contexthud').get<string>('git.branchPrefix', 'ch');
+  const branchName = buildBranchName(prefix || 'ch', task.id, task.title || task.description);
 
-  if (!response.ok) {
-    throw new Error(`Task fetch failed: ${response.status}`);
-  }
-
-  return (await response.json()) as TaskListResponse;
-}
-
-async function getTaskById(taskId: string): Promise<Task> {
-  const response = await fetch(buildApiUrl(`/tasks/${encodeURIComponent(taskId)}`));
-  if (!response.ok) {
-    throw new Error(`Task detail fetch failed: ${response.status}`);
-  }
-
-  const data = (await response.json()) as TaskDetailResponse;
-  return data.task;
-}
-
-async function patchTask(taskId: string, patch: Record<string, unknown>): Promise<Task> {
-  const response = await fetch(buildApiUrl(`/tasks/${encodeURIComponent(taskId)}`), {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(patch)
+  const result = await checkoutOrCreateBranch(repoRoot, branchName);
+  const updated = await patchTask(taskId, {
+    branchName,
+    status: 'in_progress'
   });
 
-  if (!response.ok) {
-    throw new Error(`Task patch failed: ${response.status}`);
-  }
+  vscode.window.showInformationMessage(
+    result.created
+      ? `Started task and created branch ${branchName}`
+      : `Started task and switched to existing branch ${branchName}`
+  );
 
-  const data = (await response.json()) as TaskDetailResponse;
-  return data.task;
+  return updated;
 }
 
-async function summarizeTask(taskId: string): Promise<Task> {
-  const response = await fetch(buildApiUrl(`/tasks/${encodeURIComponent(taskId)}/ai/summarize`), {
-    method: 'POST'
+async function openPr(taskId: string): Promise<void> {
+  const task = await getTaskById(taskId);
+  if (!task.branchName) {
+    vscode.window.showWarningMessage('Start the task first to create/switch branch before opening PR.');
+    return;
+  }
+
+  const repoRoot = await getRepoRoot();
+  const remote = await getRemoteOriginUrl(repoRoot);
+  const configuredBase = vscode.workspace.getConfiguration('contexthud').get<string>('git.baseBranch', 'main') || 'main';
+  const baseBranch = await detectBaseBranch(repoRoot, configuredBase);
+  const compareUrl = buildGitHubCompareUrl(remote, baseBranch, task.branchName);
+
+  if (!compareUrl) {
+    vscode.window.showWarningMessage('Open PR currently supports GitHub remotes only.');
+    return;
+  }
+
+  await vscode.env.openExternal(vscode.Uri.parse(compareUrl));
+}
+
+async function openCommit(sha: string): Promise<void> {
+  const repoRoot = await getRepoRoot();
+  const content = await showCommit(repoRoot, sha);
+  const doc = await vscode.workspace.openTextDocument({
+    language: 'diff',
+    content
   });
-
-  if (!response.ok) {
-    throw new Error(`AI summarize failed: ${response.status}`);
-  }
-
-  const data = (await response.json()) as TaskDetailResponse;
-  return data.task;
+  await vscode.window.showTextDocument(doc, vscode.ViewColumn.Active, true);
 }
 
-function getApiBaseUrl(): string {
-  const raw = vscode.workspace.getConfiguration('contexthud').get<string>('apiBaseUrl', 'http://localhost:8787');
-  const trimmed = String(raw || '').trim();
-  if (!trimmed) {
-    return 'http://localhost:8787';
-  }
+function startCommitLinkPolling(context: vscode.ExtensionContext, sidebar: SidebarProvider): void {
+  const intervalSec = Math.max(
+    5,
+    Number(vscode.workspace.getConfiguration('contexthud').get<number>('git.commitPollIntervalSec', 15))
+  );
 
-  if (/^https?:\/\//i.test(trimmed)) {
-    return trimmed.replace(/\/$/, '');
-  }
-
-  return `http://${trimmed}`.replace(/\/$/, '');
+  commitPollHandle = setInterval(() => {
+    void pollActiveTaskCommit(context, sidebar);
+  }, intervalSec * 1000);
 }
 
-function buildApiUrl(pathname: string): string {
-  const base = getApiBaseUrl();
-  const normalizedPath = pathname.startsWith('/') ? pathname : `/${pathname}`;
-  return `${base}${normalizedPath}`;
+async function pollActiveTaskCommit(context: vscode.ExtensionContext, sidebar: SidebarProvider): Promise<void> {
+  const activeTaskId = getActiveTaskId(context.workspaceState);
+  if (!activeTaskId) {
+    return;
+  }
+
+  try {
+    const task = await getTaskById(activeTaskId);
+    if (!task.branchName) {
+      return;
+    }
+
+    const repoRoot = await getRepoRoot();
+    const currentBranch = await getCurrentBranch(repoRoot);
+    if (currentBranch !== task.branchName) {
+      return;
+    }
+
+    const sha = await getHeadSha(repoRoot);
+    if (!sha || lastSeenCommitByTask.get(activeTaskId) === sha) {
+      return;
+    }
+
+    if (task.commits?.some((commit) => commit.sha === sha)) {
+      lastSeenCommitByTask.set(activeTaskId, sha);
+      return;
+    }
+
+    const commit = await readCommit(repoRoot, sha);
+    await addTaskCommit(activeTaskId, commit);
+    lastSeenCommitByTask.set(activeTaskId, sha);
+    await refreshTasks(sidebar);
+  } catch {
+    // best-effort polling; keep silent to avoid noisy UX
+  }
 }
 
 function applySubtleGlow(editor: vscode.TextEditor): void {

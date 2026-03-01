@@ -27,6 +27,7 @@ function mapTask(row) {
     sourceUrl: row.source_url,
     linkedFiles: safeJsonParse(row.linked_files, []),
     branchName: row.branch_name,
+    commits: safeJsonParse(row.commits, []),
     ai_title: row.ai_title,
     ai_summary: row.ai_summary,
     ai_acceptance_criteria: safeJsonParse(row.ai_acceptance_criteria, []),
@@ -40,10 +41,7 @@ function mapTask(row) {
 function listTasks(assignee) {
   let rows;
   if (assignee) {
-    rows = all(
-      `SELECT * FROM tasks WHERE assignee_id = ? ORDER BY order_index ASC, created_at DESC`,
-      assignee
-    );
+    rows = all(`SELECT * FROM tasks WHERE assignee_id = ? ORDER BY order_index ASC, created_at DESC`, assignee);
   } else {
     rows = all(`SELECT * FROM tasks ORDER BY assignee_id ASC, order_index ASC, created_at DESC`);
   }
@@ -70,10 +68,10 @@ function createTask(input) {
   run(
     `INSERT INTO tasks (
       id, assignee_id, title, description, status, priority, due_date, order_index, source, source_url,
-      slack_user_id, slack_channel_id, slack_thread_ts, linked_files, branch_name,
+      slack_user_id, slack_channel_id, slack_thread_ts, linked_files, branch_name, commits,
       ai_title, ai_summary, ai_acceptance_criteria, ai_open_questions, ai_tags,
       created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     id,
     input.assignee_id,
     input.title,
@@ -89,6 +87,7 @@ function createTask(input) {
     input.slackThreadTs || null,
     JSON.stringify(input.linkedFiles || []),
     input.branchName || null,
+    JSON.stringify(input.commits || []),
     input.ai_title || null,
     input.ai_summary || null,
     JSON.stringify(input.ai_acceptance_criteria || []),
@@ -99,13 +98,7 @@ function createTask(input) {
   );
 
   if (input.sourceUrl) {
-    run(
-      `INSERT INTO task_links (task_id, link_type, url, created_at) VALUES (?, ?, ?, ?)`,
-      id,
-      'slack_thread',
-      input.sourceUrl,
-      now
-    );
+    run(`INSERT INTO task_links (task_id, link_type, url, created_at) VALUES (?, ?, ?, ?)`, id, 'slack_thread', input.sourceUrl, now);
   }
 
   return getTaskById(id);
@@ -121,6 +114,7 @@ function patchTask(id, patch) {
     ...existing,
     ...patch,
     linkedFiles: patch.linkedFiles ?? existing.linkedFiles,
+    commits: patch.commits ?? existing.commits,
     ai_acceptance_criteria: patch.ai_acceptance_criteria ?? existing.ai_acceptance_criteria,
     ai_open_questions: patch.ai_open_questions ?? existing.ai_open_questions,
     ai_tags: patch.ai_tags ?? existing.ai_tags
@@ -128,7 +122,7 @@ function patchTask(id, patch) {
 
   run(
     `UPDATE tasks
-     SET title = ?, description = ?, status = ?, priority = ?, due_date = ?, linked_files = ?, branch_name = ?,
+     SET title = ?, description = ?, status = ?, priority = ?, due_date = ?, linked_files = ?, branch_name = ?, commits = ?,
          ai_title = ?, ai_summary = ?, ai_acceptance_criteria = ?, ai_open_questions = ?, ai_tags = ?, updated_at = ?
      WHERE id = ?`,
     next.title,
@@ -138,6 +132,7 @@ function patchTask(id, patch) {
     next.dueDate || null,
     JSON.stringify(next.linkedFiles || []),
     next.branchName || null,
+    JSON.stringify(next.commits || []),
     next.ai_title || null,
     next.ai_summary || null,
     JSON.stringify(next.ai_acceptance_criteria || []),
@@ -148,6 +143,21 @@ function patchTask(id, patch) {
   );
 
   return getTaskById(id);
+}
+
+function addCommit(id, commit) {
+  const task = getTaskById(id);
+  if (!task) {
+    return null;
+  }
+
+  const existing = task.commits || [];
+  if (existing.some((item) => item.sha === commit.sha)) {
+    return task;
+  }
+
+  const nextCommits = [commit, ...existing].slice(0, 100);
+  return patchTask(id, { commits: nextCommits });
 }
 
 function localAiSummarize(task) {
@@ -192,6 +202,7 @@ function summarizeTask(id) {
 }
 
 module.exports = {
+  addCommit,
   createTask,
   getTaskById,
   listTasks,
