@@ -41,7 +41,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           const updated = await patchTaskRequest(id, patch);
           if (typeof patch.status === 'string') {
             const label = patch.status.replace('_', ' ');
-            void vscode.window.showInformationMessage(`Task status set to `);
+            void vscode.window.showInformationMessage('Task status set to ' + label);
           }
           return updated;
         },

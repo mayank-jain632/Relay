@@ -110,14 +110,18 @@ function patchTask(id, patch) {
     return null;
   }
 
+  const definedPatch = Object.fromEntries(
+    Object.entries(patch || {}).filter(([, value]) => value !== undefined)
+  );
+
   const next = {
     ...existing,
-    ...patch,
-    linkedFiles: patch.linkedFiles ?? existing.linkedFiles,
-    commits: patch.commits ?? existing.commits,
-    ai_acceptance_criteria: patch.ai_acceptance_criteria ?? existing.ai_acceptance_criteria,
-    ai_open_questions: patch.ai_open_questions ?? existing.ai_open_questions,
-    ai_tags: patch.ai_tags ?? existing.ai_tags
+    ...definedPatch,
+    linkedFiles: definedPatch.linkedFiles ?? existing.linkedFiles,
+    commits: definedPatch.commits ?? existing.commits,
+    ai_acceptance_criteria: definedPatch.ai_acceptance_criteria ?? existing.ai_acceptance_criteria,
+    ai_open_questions: definedPatch.ai_open_questions ?? existing.ai_open_questions,
+    ai_tags: definedPatch.ai_tags ?? existing.ai_tags
   };
 
   run(
