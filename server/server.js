@@ -36,6 +36,10 @@ const {
   verifyAuthToken
 } = require('./lib/auth-repo');
 
+const runtimeState = {
+  startupInitError: null
+};
+
 function nowIso() {
   return new Date().toISOString();
 }
@@ -419,13 +423,31 @@ function createApp() {
     return next();
   }
 
-  app.get('/health', async (_req, res, next) => {
+  app.get('/health/live', (_req, res) => {
+    res.json({ ok: true, service: 'alive' });
+  });
+
+  app.get('/health', async (_req, res) => {
+    let connected = false;
+    let dbError = null;
+
     try {
-      const connected = await healthCheck();
-      return res.json({ ok: true, db: connected ? 'connected' : 'disconnected' });
+      connected = await healthCheck();
     } catch (error) {
-      return next(error);
+      dbError = String(error?.message || error);
     }
+
+    const startupError = runtimeState.startupInitError
+      ? String(runtimeState.startupInitError.message || runtimeState.startupInitError)
+      : null;
+
+    const ok = connected && !startupError;
+    return res.status(ok ? 200 : 503).json({
+      ok,
+      db: connected ? 'connected' : 'disconnected',
+      startupError,
+      dbError
+    });
   });
 
   app.post('/auth/vscode/start', async (_req, res, next) => {
@@ -795,8 +817,18 @@ function createApp() {
 
 async function start() {
   loadEnv();
-  await initSchema();
-  await cleanupExpiredAuthArtifacts();
+
+  try {
+    await initSchema();
+    await cleanupExpiredAuthArtifacts();
+    runtimeState.startupInitError = null;
+  } catch (error) {
+    runtimeState.startupInitError = error;
+    log('error', 'startup_init_failed', {
+      error: String(error?.message || error),
+      stack: String(error?.stack || '')
+    });
+  }
 
   const app = createApp();
   const port = Number(process.env.PORT || 8787);
@@ -810,7 +842,10 @@ async function start() {
 
 if (require.main === module) {
   void start().catch((error) => {
-    log('error', 'startup_failed', { error: String(error?.message || error) });
+    log('error', 'startup_failed', {
+      error: String(error?.message || error),
+      stack: String(error?.stack || '')
+    });
     process.exit(1);
   });
 }
