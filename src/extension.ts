@@ -1,10 +1,9 @@
 import * as vscode from 'vscode';
 import { SidebarProvider } from './SidebarProvider';
 import { Task } from './shared/types';
-import { getCurrentUser } from './shared/userMap';
 import { getWorkspaceRelativePath, normalizeFilePath, prioritizeByFile, sortByOrder } from './shared/taskUtils';
 import { TaskDetailPanel } from './TaskDetailPanel';
-import { addTaskCommit, fetchTaskList, getTaskById, patchTask as patchTaskRequest, summarizeTask } from './api/client';
+import { addTaskCommit, fetchTaskList, getTaskById, patchTask as patchTaskRequest } from './api/client';
 import {
   buildBranchName,
   buildGitHubCompareUrl,
@@ -45,7 +44,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
           }
           return updated;
         },
-        summarizeTask,
         startTask,
         openPr,
         openCommit
@@ -124,33 +122,30 @@ function maybeShowSecondarySidebarOnboarding(context: vscode.ExtensionContext): 
   );
 }
 
+function getConfiguredHandle(): string | undefined {
+  const handle = vscode.workspace.getConfiguration('contexthud').get<string>('user.handle', '').trim();
+  return handle || undefined;
+}
+
 async function refreshTasks(sidebar: SidebarProvider): Promise<void> {
-  const configuredUser = await getCurrentUser();
+  const assigneeHandle = getConfiguredHandle();
 
   try {
-    const data = await fetchTaskList();
-
-    const privateFiltered = configuredUser
-      ? data.tasks.filter((task) => sameIdentity(task.assignee_id, configuredUser))
-      : data.tasks;
-
-    const pending = sortByOrder(privateFiltered.filter((task) => task.status !== 'done'));
-    const completed = sortByOrder(privateFiltered.filter((task) => task.status === 'done'));
+    const data = await fetchTaskList(assigneeHandle);
+    const pending = sortByOrder(data.tasks.filter((task) => task.status !== 'done'));
+    const completed = sortByOrder(data.tasks.filter((task) => task.status === 'done'));
     currentTasks = [...pending, ...completed];
     sidebar.updateTasks(currentTasks);
   } catch (error) {
-    vscode.window.showErrorMessage(`ContextHUD failed to fetch tasks: ${String(error)}`);
+    const retry = 'Retry';
+    const picked = await vscode.window.showErrorMessage(
+      `ContextHUD couldn\'t load tasks. Check backend server and API URL. (${String(error)})`,
+      retry
+    );
+    if (picked === retry) {
+      await refreshTasks(sidebar);
+    }
   }
-}
-
-function normalizeIdentity(value: string): string {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '');
-}
-
-function sameIdentity(a: string, b: string): boolean {
-  return normalizeIdentity(a) === normalizeIdentity(b);
 }
 
 async function startTask(taskId: string): Promise<Task> {
@@ -193,6 +188,11 @@ async function openPr(taskId: string): Promise<void> {
   }
 
   await vscode.env.openExternal(vscode.Uri.parse(compareUrl));
+  await patchTaskRequest(taskId, {
+    prUrl: compareUrl,
+    status: 'review'
+  });
+  vscode.window.showInformationMessage('Opened PR compare view and moved task to review.');
 }
 
 async function openCommit(sha: string): Promise<void> {

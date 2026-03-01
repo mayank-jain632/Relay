@@ -55,6 +55,11 @@
           "default": "http://localhost:8787",
           "description": "Backend API base URL."
         },
+        "contexthud.user.handle": {
+          "type": "string",
+          "default": "",
+          "description": "Assignee handle used for task filtering in the IDE (assignee=handle)."
+        },
         "contexthud.git.branchPrefix": {
           "type": "string",
           "default": "ch",

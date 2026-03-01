@@ -20,8 +20,9 @@ function buildApiUrl(pathname: string): string {
   return `${base}${normalizedPath}`;
 }
 
-export async function fetchTaskList(): Promise<TaskListResponse> {
-  const response = await fetch(buildApiUrl('/tasks'));
+export async function fetchTaskList(assignee?: string): Promise<TaskListResponse> {
+  const query = assignee ? `?assignee=${encodeURIComponent(assignee)}` : '';
+  const response = await fetch(buildApiUrl(`/tasks${query}`));
   if (!response.ok) {
     throw new Error(`Task fetch failed: ${response.status}`);
   }
@@ -46,17 +47,6 @@ export async function patchTask(taskId: string, patch: Record<string, unknown>):
   if (!response.ok) {
     const detail = await response.text();
     throw new Error(`Task patch failed: ${response.status}${detail ? ` - ${detail}` : ''}`);
-  }
-  const data = (await response.json()) as TaskDetailResponse;
-  return data.task;
-}
-
-export async function summarizeTask(taskId: string): Promise<Task> {
-  const response = await fetch(buildApiUrl(`/tasks/${encodeURIComponent(taskId)}/ai/summarize`), {
-    method: 'POST'
-  });
-  if (!response.ok) {
-    throw new Error(`AI summarize failed: ${response.status}`);
   }
   const data = (await response.json()) as TaskDetailResponse;
   return data.task;

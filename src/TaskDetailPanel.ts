@@ -2,19 +2,19 @@ import * as vscode from 'vscode';
 import { Task } from './shared/types';
 
 interface DetailMessage {
-  type: 'requestTask' | 'startTask' | 'setStatus' | 'askAi' | 'savePatch' | 'openPr' | 'openCommit';
+  type: 'requestTask' | 'startTask' | 'setStatus' | 'savePatch' | 'openPr' | 'openCommit';
   status?: Task['status'];
   title?: string;
   description?: string;
   branchName?: string;
   linkedFiles?: string;
+  autoCloseOnMerge?: boolean;
   sha?: string;
 }
 
 interface TaskApi {
   getTaskById: (taskId: string) => Promise<Task>;
   patchTask: (taskId: string, patch: Record<string, unknown>) => Promise<Task>;
-  summarizeTask: (taskId: string) => Promise<Task>;
   startTask: (taskId: string) => Promise<Task>;
   openPr: (taskId: string) => Promise<void>;
   openCommit: (sha: string) => Promise<void>;
@@ -77,12 +77,6 @@ export class TaskDetailPanel {
       return;
     }
 
-    if (message.type === 'askAi') {
-      await this.api.summarizeTask(this.taskId);
-      await this.afterMutation();
-      return;
-    }
-
     if (message.type === 'savePatch') {
       const linkedFiles = String(message.linkedFiles || '')
         .split(',')
@@ -93,7 +87,8 @@ export class TaskDetailPanel {
         title: message.title,
         description: message.description,
         branchName: message.branchName,
-        linkedFiles
+        linkedFiles,
+        autoCloseOnMerge: message.autoCloseOnMerge
       });
       await this.afterMutation();
       return;
@@ -101,6 +96,7 @@ export class TaskDetailPanel {
 
     if (message.type === 'openPr') {
       await this.api.openPr(this.taskId);
+      await this.afterMutation();
       return;
     }
 
@@ -145,8 +141,11 @@ export class TaskDetailPanel {
     .status-todo { background: rgba(72, 158, 255, 0.2); color: #b7ddff; border: 1px solid rgba(72, 158, 255, 0.45); }
     .status-in-progress { background: rgba(227, 191, 64, 0.2); color: #ffe8a4; border: 1px solid rgba(227, 191, 64, 0.45); }
     .status-blocked { background: rgba(219, 72, 72, 0.2); color: #ffc2c2; border: 1px solid rgba(219, 72, 72, 0.5); }
+    .status-review { background: rgba(171, 113, 255, 0.2); color: #e3ccff; border: 1px solid rgba(171, 113, 255, 0.5); }
     .status-done { background: rgba(79, 194, 114, 0.22); color: #bff7d0; border: 1px solid rgba(79, 194, 114, 0.45); }
     button.active { border-color: #f5f7f9; box-shadow: 0 0 0 2px rgba(245, 247, 249, 0.35) inset; }
+    .check-row { display: flex; align-items: center; gap: 8px; }
+    .check-row input { width: auto; }
   </style>
 </head>
 <body>
@@ -157,9 +156,9 @@ export class TaskDetailPanel {
       <button data-status="todo">Todo</button>
       <button data-status="in_progress">In Progress</button>
       <button data-status="blocked">Blocked</button>
+      <button data-status="review">Review</button>
       <button data-status="done">Done</button>
       <button id="openPr">Open PR</button>
-      <button id="askAi">Ask AI</button>
     </div>
 
     <div>
@@ -182,22 +181,16 @@ export class TaskDetailPanel {
       <input id="branchName" />
     </div>
 
+    <label class="check-row">
+      <input type="checkbox" id="autoCloseOnMerge" />
+      <span>Auto-close when PR merges</span>
+    </label>
+
     <div><button id="save">Save Changes</button></div>
 
     <div class="block">
       <div class="label">Commits</div>
       <ul id="commits"></ul>
-    </div>
-
-    <div class="block">
-      <div class="label">AI Summary</div>
-      <p id="aiSummary">No summary yet.</p>
-      <div class="label">Acceptance Criteria</div>
-      <ul id="aiCriteria"></ul>
-      <div class="label">Open Questions</div>
-      <ul id="aiQuestions"></ul>
-      <div class="label">Tags</div>
-      <p id="aiTags">-</p>
     </div>
   </div>
 
@@ -207,32 +200,24 @@ export class TaskDetailPanel {
     const description = document.getElementById('description');
     const linkedFiles = document.getElementById('linkedFiles');
     const branchName = document.getElementById('branchName');
+    const autoCloseOnMerge = document.getElementById('autoCloseOnMerge');
 
     document.getElementById('start').addEventListener('click', () => vscode.postMessage({ type: 'startTask' }));
     document.getElementById('openPr').addEventListener('click', () => vscode.postMessage({ type: 'openPr' }));
-    document.getElementById('askAi').addEventListener('click', () => vscode.postMessage({ type: 'askAi' }));
     document.getElementById('save').addEventListener('click', () => {
       vscode.postMessage({
         type: 'savePatch',
         title: title.value,
         description: description.value,
         linkedFiles: linkedFiles.value,
-        branchName: branchName.value
+        branchName: branchName.value,
+        autoCloseOnMerge: autoCloseOnMerge.checked
       });
     });
 
     Array.from(document.querySelectorAll('button[data-status]')).forEach((btn) => {
       btn.addEventListener('click', () => vscode.postMessage({ type: 'setStatus', status: btn.getAttribute('data-status') }));
     });
-
-    function setList(id, values) {
-      const node = document.getElementById(id);
-      if (!Array.isArray(values) || values.length === 0) {
-        node.innerHTML = '<li>None</li>';
-        return;
-      }
-      node.innerHTML = values.map((v) => '<li>' + v + '</li>').join('');
-    }
 
     function setActiveStatus(status) {
       const normalized = String(status || 'todo');
@@ -243,6 +228,7 @@ export class TaskDetailPanel {
         todo: 'status-todo',
         in_progress: 'status-in-progress',
         blocked: 'status-blocked',
+        review: 'status-review',
         done: 'status-done'
       };
 
@@ -285,11 +271,8 @@ export class TaskDetailPanel {
       description.value = task.description || '';
       linkedFiles.value = Array.isArray(task.linkedFiles) ? task.linkedFiles.join(', ') : '';
       branchName.value = task.branchName || '';
+      autoCloseOnMerge.checked = Boolean(task.autoCloseOnMerge);
       setActiveStatus(task.status);
-      document.getElementById('aiSummary').textContent = task.ai_summary || 'No summary yet.';
-      setList('aiCriteria', task.ai_acceptance_criteria || []);
-      setList('aiQuestions', task.ai_open_questions || []);
-      document.getElementById('aiTags').textContent = (task.ai_tags || []).join(', ') || '-';
       renderCommits(task.commits || []);
     });
 

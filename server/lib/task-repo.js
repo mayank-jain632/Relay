@@ -25,8 +25,13 @@ function mapTask(row) {
     orderIndex: row.order_index,
     source: row.source,
     sourceUrl: row.source_url,
+    slackUserId: row.slack_user_id,
+    slackChannelId: row.slack_channel_id,
+    slackThreadTs: row.slack_thread_ts,
     linkedFiles: safeJsonParse(row.linked_files, []),
     branchName: row.branch_name,
+    prUrl: row.pr_url,
+    autoCloseOnMerge: Boolean(row.auto_close_on_merge),
     commits: safeJsonParse(row.commits, []),
     ai_title: row.ai_title,
     ai_summary: row.ai_summary,
@@ -68,10 +73,10 @@ function createTask(input) {
   run(
     `INSERT INTO tasks (
       id, assignee_id, title, description, status, priority, due_date, order_index, source, source_url,
-      slack_user_id, slack_channel_id, slack_thread_ts, linked_files, branch_name, commits,
+      slack_user_id, slack_channel_id, slack_thread_ts, linked_files, branch_name, pr_url, auto_close_on_merge, commits,
       ai_title, ai_summary, ai_acceptance_criteria, ai_open_questions, ai_tags,
       created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     id,
     input.assignee_id,
     input.title,
@@ -87,6 +92,8 @@ function createTask(input) {
     input.slackThreadTs || null,
     JSON.stringify(input.linkedFiles || []),
     input.branchName || null,
+    input.prUrl || null,
+    input.autoCloseOnMerge ? 1 : 0,
     JSON.stringify(input.commits || []),
     input.ai_title || null,
     input.ai_summary || null,
@@ -121,13 +128,15 @@ function patchTask(id, patch) {
     commits: definedPatch.commits ?? existing.commits,
     ai_acceptance_criteria: definedPatch.ai_acceptance_criteria ?? existing.ai_acceptance_criteria,
     ai_open_questions: definedPatch.ai_open_questions ?? existing.ai_open_questions,
-    ai_tags: definedPatch.ai_tags ?? existing.ai_tags
+    ai_tags: definedPatch.ai_tags ?? existing.ai_tags,
+    autoCloseOnMerge: definedPatch.autoCloseOnMerge ?? existing.autoCloseOnMerge
   };
 
   run(
     `UPDATE tasks
-     SET title = ?, description = ?, status = ?, priority = ?, due_date = ?, linked_files = ?, branch_name = ?, commits = ?,
-         ai_title = ?, ai_summary = ?, ai_acceptance_criteria = ?, ai_open_questions = ?, ai_tags = ?, updated_at = ?
+     SET title = ?, description = ?, status = ?, priority = ?, due_date = ?, linked_files = ?, branch_name = ?, pr_url = ?,
+         auto_close_on_merge = ?, commits = ?, ai_title = ?, ai_summary = ?, ai_acceptance_criteria = ?, ai_open_questions = ?,
+         ai_tags = ?, updated_at = ?
      WHERE id = ?`,
     next.title,
     next.description,
@@ -136,6 +145,8 @@ function patchTask(id, patch) {
     next.dueDate || null,
     JSON.stringify(next.linkedFiles || []),
     next.branchName || null,
+    next.prUrl || null,
+    next.autoCloseOnMerge ? 1 : 0,
     JSON.stringify(next.commits || []),
     next.ai_title || null,
     next.ai_summary || null,
