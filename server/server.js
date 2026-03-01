@@ -3,7 +3,7 @@ const express = require('express');
 const { initSchema } = require('./lib/db');
 const { parseNudgeInput, parseSlackTaskText } = require('./lib/slack-parser');
 const { resolveAssignee } = require('./lib/user-map');
-const { createTask, getTaskById, listTasks, nextOrderIndex, patchTask, summarizeTask } = require('./lib/task-repo');
+const { addCommit, createTask, getTaskById, listTasks, nextOrderIndex, patchTask, summarizeTask } = require('./lib/task-repo');
 
 initSchema();
 
@@ -124,6 +124,26 @@ app.patch('/tasks/:id', (req, res) => {
   };
 
   const task = patchTask(req.params.id, allowed);
+  if (!task) {
+    return res.status(404).json({ error: 'Task not found' });
+  }
+
+  return res.json({ ok: true, task });
+});
+
+app.post('/tasks/:id/commits', (req, res) => {
+  const body = req.body || {};
+  if (!body.sha) {
+    return res.status(400).json({ error: 'sha is required' });
+  }
+
+  const task = addCommit(req.params.id, {
+    sha: String(body.sha),
+    message: String(body.message || ''),
+    author: String(body.author || ''),
+    date: String(body.date || new Date().toISOString())
+  });
+
   if (!task) {
     return res.status(404).json({ error: 'Task not found' });
   }

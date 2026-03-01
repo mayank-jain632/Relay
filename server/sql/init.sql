@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   slack_thread_ts TEXT,
   linked_files TEXT NOT NULL DEFAULT '[]',
   branch_name TEXT,
+  commits TEXT NOT NULL DEFAULT '[]',
   ai_title TEXT,
   ai_summary TEXT,
   ai_acceptance_criteria TEXT NOT NULL DEFAULT '[]',

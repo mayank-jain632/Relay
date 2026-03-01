@@ -54,6 +54,22 @@
           "type": "string",
           "default": "http://localhost:8787",
           "description": "Backend API base URL."
+        },
+        "contexthud.git.branchPrefix": {
+          "type": "string",
+          "default": "ch",
+          "description": "Branch prefix used when starting tasks."
+        },
+        "contexthud.git.baseBranch": {
+          "type": "string",
+          "default": "main",
+          "description": "Base branch used for GitHub compare URL generation."
+        },
+        "contexthud.git.commitPollIntervalSec": {
+          "type": "number",
+          "default": 15,
+          "minimum": 5,
+          "description": "Polling interval in seconds for detecting new commits on active task branch."
         }
       }
     }

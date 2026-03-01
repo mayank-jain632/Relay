@@ -13,10 +13,21 @@ const db = new DatabaseSync(dbPath);
 db.exec('PRAGMA journal_mode = WAL;');
 db.exec('PRAGMA foreign_keys = ON;');
 
+function safeAlter(sql) {
+  try {
+    db.exec(sql);
+  } catch {
+    // ignore: column may already exist
+  }
+}
+
 function initSchema() {
   const schemaPath = path.join(process.cwd(), 'server', 'sql', 'init.sql');
   const sql = fs.readFileSync(schemaPath, 'utf8');
   db.exec(sql);
+
+  // Backward-compatible migrations for existing local DBs.
+  safeAlter(`ALTER TABLE tasks ADD COLUMN commits TEXT NOT NULL DEFAULT '[]'`);
 }
 
 function all(sql, ...params) {
