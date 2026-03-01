@@ -323,6 +323,20 @@ async function ingestSlackTask(projectId, payload) {
   };
 }
 
+function normalizeSlackIngestPayload(payload) {
+  const body = payload || {};
+  const event = body.event || {};
+
+  return {
+    text: String(event.text || body.text || ''),
+    user_id: String(event.user || body.user_id || ''),
+    channel_id: String(event.channel || body.channel_id || ''),
+    thread_ts: String(event.thread_ts || event.ts || body.thread_ts || ''),
+    team_id: String((body.team && body.team.id) || body.team_id || ''),
+    response_url: String(body.response_url || '')
+  };
+}
+
 function createApp() {
   loadEnv();
 
@@ -627,7 +641,28 @@ function createApp() {
       }
 
       const projectId = String(req.params.projectId || '').trim();
-      const response = await ingestSlackTask(projectId, req.body || {});
+      const body = req.body || {};
+
+      // Slack Event Subscriptions URL verification handshake.
+      if (body.type === 'url_verification' && body.challenge) {
+        return res.status(200).json({ challenge: body.challenge });
+      }
+
+      // Ignore bot-originated events to avoid loops.
+      if (body.type === 'event_callback' && body.event && body.event.bot_id) {
+        return res.status(200).json({ ok: true, ignored: 'bot_event' });
+      }
+
+      const normalizedPayload = normalizeSlackIngestPayload(body);
+      if (!normalizedPayload.text) {
+        return res.status(200).json({ ok: true, ignored: 'no_text' });
+      }
+
+      const response = await ingestSlackTask(projectId, normalizedPayload);
+      if (body.type === 'event_callback') {
+        return res.status(200).json({ ok: true, task: response.task });
+      }
+
       return res.status(200).json(response);
     } catch (error) {
       return res.status(200).json({ ok: false, response_type: 'ephemeral', text: String(error?.message || error) });
