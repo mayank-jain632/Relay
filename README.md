@@ -1,4 +1,4 @@
-# Relay (Phase 0)
+# Relay
 
 Local PM-to-developer workflow system with:
 
