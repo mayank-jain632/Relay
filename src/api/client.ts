@@ -44,7 +44,8 @@ export async function patchTask(taskId: string, patch: Record<string, unknown>):
     body: JSON.stringify(patch)
   });
   if (!response.ok) {
-    throw new Error(`Task patch failed: ${response.status}`);
+    const detail = await response.text();
+    throw new Error(`Task patch failed: ${response.status}${detail ? ` - ${detail}` : ''}`);
   }
   const data = (await response.json()) as TaskDetailResponse;
   return data.task;

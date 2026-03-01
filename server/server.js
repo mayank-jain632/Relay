@@ -113,22 +113,28 @@ app.get('/tasks/:id', (req, res) => {
 });
 
 app.patch('/tasks/:id', (req, res) => {
-  const body = req.body || {};
-  const allowed = {
-    branchName: body.branchName,
-    description: body.description,
-    linkedFiles: body.linkedFiles,
-    priority: body.priority,
-    status: body.status,
-    title: body.title
-  };
+  try {
+    const body = req.body || {};
+    const allowed = Object.fromEntries(
+      Object.entries({
+        branchName: body.branchName,
+        description: body.description,
+        linkedFiles: body.linkedFiles,
+        priority: body.priority,
+        status: body.status,
+        title: body.title
+      }).filter(([, value]) => value !== undefined)
+    );
 
-  const task = patchTask(req.params.id, allowed);
-  if (!task) {
-    return res.status(404).json({ error: 'Task not found' });
+    const task = patchTask(req.params.id, allowed);
+    if (!task) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    return res.json({ ok: true, task });
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to patch task: ' + String(error?.message || error) });
   }
-
-  return res.json({ ok: true, task });
 });
 
 app.post('/tasks/:id/commits', (req, res) => {

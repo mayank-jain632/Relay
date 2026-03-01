@@ -51,7 +51,11 @@ export class TaskDetailPanel {
     private readonly onTaskChanged: () => Promise<void>
   ) {
     this.panel.webview.html = this.getHtml();
-    this.panel.webview.onDidReceiveMessage((message: DetailMessage) => void this.handleMessage(message));
+    this.panel.webview.onDidReceiveMessage((message: DetailMessage) => {
+      void this.handleMessage(message).catch((error) => {
+        void vscode.window.showErrorMessage(`ContextHUD action failed: ${String(error)}`);
+      });
+    });
     this.panel.onDidDispose(() => TaskDetailPanel.panels.delete(this.taskId));
   }
 
@@ -136,10 +140,18 @@ export class TaskDetailPanel {
     .block { border: 1px solid var(--vscode-panel-border); border-radius: 8px; padding: 10px; }
     ul { margin-top: 6px; }
     .commit-link { cursor: pointer; color: #8be6dc; text-decoration: underline; }
+    .status { display: flex; align-items: center; gap: 8px; font-size: 12px; opacity: 0.95; }
+    .status-badge { border-radius: 999px; padding: 3px 10px; font-weight: 700; letter-spacing: 0.03em; text-transform: uppercase; }
+    .status-todo { background: rgba(72, 158, 255, 0.2); color: #b7ddff; border: 1px solid rgba(72, 158, 255, 0.45); }
+    .status-in-progress { background: rgba(227, 191, 64, 0.2); color: #ffe8a4; border: 1px solid rgba(227, 191, 64, 0.45); }
+    .status-blocked { background: rgba(219, 72, 72, 0.2); color: #ffc2c2; border: 1px solid rgba(219, 72, 72, 0.5); }
+    .status-done { background: rgba(79, 194, 114, 0.22); color: #bff7d0; border: 1px solid rgba(79, 194, 114, 0.45); }
+    button.active { border-color: #f5f7f9; box-shadow: 0 0 0 2px rgba(245, 247, 249, 0.35) inset; }
   </style>
 </head>
 <body>
   <div class="grid">
+    <div class="status">Current Status: <span id="currentStatus" class="status-badge status-todo">TODO</span></div>
     <div class="row">
       <button id="start">Start Task</button>
       <button data-status="todo">Todo</button>
@@ -222,6 +234,29 @@ export class TaskDetailPanel {
       node.innerHTML = values.map((v) => '<li>' + v + '</li>').join('');
     }
 
+    function setActiveStatus(status) {
+      const normalized = String(status || 'todo');
+      const badge = document.getElementById('currentStatus');
+      badge.textContent = normalized.replace('_', ' ').toUpperCase();
+
+      const classMap = {
+        todo: 'status-todo',
+        in_progress: 'status-in-progress',
+        blocked: 'status-blocked',
+        done: 'status-done'
+      };
+
+      badge.className = 'status-badge ' + (classMap[normalized] || 'status-todo');
+
+      Array.from(document.querySelectorAll('button[data-status]')).forEach((btn) => {
+        if (btn.getAttribute('data-status') === normalized) {
+          btn.classList.add('active');
+        } else {
+          btn.classList.remove('active');
+        }
+      });
+    }
+
     function renderCommits(commits) {
       const node = document.getElementById('commits');
       if (!Array.isArray(commits) || commits.length === 0) {
@@ -250,6 +285,7 @@ export class TaskDetailPanel {
       description.value = task.description || '';
       linkedFiles.value = Array.isArray(task.linkedFiles) ? task.linkedFiles.join(', ') : '';
       branchName.value = task.branchName || '';
+      setActiveStatus(task.status);
       document.getElementById('aiSummary').textContent = task.ai_summary || 'No summary yet.';
       setList('aiCriteria', task.ai_acceptance_criteria || []);
       setList('aiQuestions', task.ai_open_questions || []);
