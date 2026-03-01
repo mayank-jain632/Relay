@@ -70,11 +70,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     .pill {
       border-radius: 999px;
       font-size: 10px;
-      padding: 2px 8px;
-      border: 1px solid rgba(52, 213, 195, 0.4);
-      color: #9ff3e8;
+      padding: 3px 8px;
       text-transform: uppercase;
+      font-weight: 700;
+      letter-spacing: 0.03em;
     }
+    .pill-todo { background: rgba(72, 158, 255, 0.2); color: #b7ddff; border: 1px solid rgba(72, 158, 255, 0.45); }
+    .pill-in-progress { background: rgba(227, 191, 64, 0.2); color: #ffe8a4; border: 1px solid rgba(227, 191, 64, 0.45); }
+    .pill-blocked { background: rgba(219, 72, 72, 0.2); color: #ffc2c2; border: 1px solid rgba(219, 72, 72, 0.5); }
+    .pill-review { background: rgba(171, 113, 255, 0.2); color: #e3ccff; border: 1px solid rgba(171, 113, 255, 0.5); }
+    .pill-done { background: rgba(79, 194, 114, 0.22); color: #bff7d0; border: 1px solid rgba(79, 194, 114, 0.45); }
     .meta { color: var(--muted); font-size: 10px; }
     .empty { color: var(--muted); font-size: 12px; padding: 12px; border: 1px dashed var(--border); border-radius: 8px; }
   </style>
@@ -97,13 +102,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
       list.innerHTML = tasks.map(task => {
         const title = escapeHtml(task.title || task.description || 'Untitled task');
-        const status = escapeHtml(task.status || 'todo');
+        const statusRaw = String(task.status || 'todo');
+        const status = escapeHtml(statusRaw.replace('_', ' '));
+        const statusClass = 'pill-' + statusRaw.replace('_', '-');
         const ts = new Date(task.timestamp).toLocaleString();
         return [
           '<section class="item" data-id="' + task.id + '">',
           '  <p class="title">' + title + '</p>',
           '  <div class="row">',
-          '    <span class="pill">' + status + '</span>',
+          '    <span class="pill ' + statusClass + '">' + status + '</span>',
           '    <span class="meta">' + ts + ' · Slack</span>',
           '  </div>',
           '</section>'

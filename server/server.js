@@ -17,24 +17,103 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
 
-function ingestSlackPayload(payload) {
-  const parsed = parseSlackTaskText(payload.text || '');
+function normalizeKey(value) {
+  return String(value || '')
+    .trim()
+    .replace(/^@/, '')
+    .toLowerCase();
+}
+
+function formatStatus(status) {
+  return String(status || 'todo').replace('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function buildStatusMessage(task) {
+  const assignee = task.assignee_id ? `@${task.assignee_id}` : 'assignee';
+  const status = String(task.status || 'todo');
+  const statusLabel = formatStatus(status);
+  const branchPart = task.branchName ? ` (branch: ${task.branchName})` : '';
+  const prPart = task.prUrl ? `\nPR: ${task.prUrl}` : '';
+
+  if (status === 'in_progress') {
+    return `🟦 ContextHUD: ${assignee} started this task -> ${statusLabel}${branchPart}${prPart}`;
+  }
+
+  if (status === 'review') {
+    return `🟨 ContextHUD: PR opened -> ${statusLabel}${branchPart}${prPart}`;
+  }
+
+  if (status === 'done') {
+    return `✅ ContextHUD: Marked ${statusLabel}${branchPart}${prPart}`;
+  }
+
+  if (status === 'blocked') {
+    return `⛔ ContextHUD: Status updated -> ${statusLabel}${branchPart}${prPart}`;
+  }
+
+  return `🔄 ContextHUD: Status updated -> ${statusLabel}${branchPart}${prPart}`;
+}
+
+async function postStatusToSlackThread(task) {
+  const token = String(process.env.SLACK_BOT_TOKEN || '').trim();
+  if (!token) {
+    return null;
+  }
+
+  if (!task.slackChannelId || !task.slackThreadTs) {
+    return null;
+  }
+
+  try {
+    const response = await fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json; charset=utf-8'
+      },
+      body: JSON.stringify({
+        channel: task.slackChannelId,
+        thread_ts: task.slackThreadTs,
+        text: buildStatusMessage(task)
+      })
+    });
+
+    const payload = await response.json();
+    if (!response.ok || !payload.ok) {
+      const reason = payload?.error || `HTTP ${response.status}`;
+      console.error('[ContextHUD] Slack post failed:', reason);
+      return `Slack status update failed: ${reason}`;
+    }
+
+    return null;
+  } catch (error) {
+    console.error('[ContextHUD] Slack post failed:', error);
+    return `Slack status update failed: ${String(error.message || error)}`;
+  }
+}
+
+function resolveAssigneeForPayload(parsed, payload) {
+  const configuredHandle = String(process.env.CONTEXTHUD_USER_HANDLE || '').trim();
+  const normalizedToken = normalizeKey(parsed.assigneeRef);
+  const normalizedSender = normalizeKey(payload.user_name || payload.user_id);
+  const normalizedConfiguredHandle = normalizeKey(configuredHandle);
+
   let assignee = resolveAssignee(parsed.assigneeRef);
 
-  const normalizedToken = String(parsed.assigneeRef || '').trim().replace(/^@/, '').toLowerCase();
-  const normalizedSender = String(payload.user_name || '').trim().replace(/^@/, '').toLowerCase();
+  if (!assignee && normalizedConfiguredHandle && normalizedToken === normalizedConfiguredHandle) {
+    assignee = configuredHandle;
+  }
 
   if (!assignee && normalizedToken && normalizedToken === normalizedSender) {
     assignee = resolveAssignee(payload.user_id) || resolveAssignee(payload.user_name);
   }
 
-  if (!assignee) {
-    return {
-      ok: false,
-      response_type: 'ephemeral',
-      text: `No local user mapping found for ${parsed.assigneeRef}. Add it in .contexthud/users.json.`
-    };
-  }
+  return assignee || parsed.assigneeRef;
+}
+
+function ingestSlackPayload(payload) {
+  const parsed = parseSlackTaskText(payload.text || '');
+  const assignee = resolveAssigneeForPayload(parsed, payload);
 
   const task = createTask({
     assignee_id: assignee,
@@ -112,23 +191,42 @@ app.get('/tasks/:id', (req, res) => {
   return res.json({ task });
 });
 
-app.patch('/tasks/:id', (req, res) => {
-  const body = req.body || {};
-  const allowed = {
-    branchName: body.branchName,
-    description: body.description,
-    linkedFiles: body.linkedFiles,
-    priority: body.priority,
-    status: body.status,
-    title: body.title
-  };
+app.patch('/tasks/:id', async (req, res) => {
+  try {
+    const before = getTaskById(req.params.id);
+    if (!before) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
 
-  const task = patchTask(req.params.id, allowed);
-  if (!task) {
-    return res.status(404).json({ error: 'Task not found' });
+    const body = req.body || {};
+    const allowed = Object.fromEntries(
+      Object.entries({
+        autoCloseOnMerge: body.autoCloseOnMerge,
+        branchName: body.branchName,
+        description: body.description,
+        linkedFiles: body.linkedFiles,
+        prUrl: body.prUrl,
+        priority: body.priority,
+        status: body.status,
+        title: body.title
+      }).filter(([, value]) => value !== undefined)
+    );
+
+    const task = patchTask(req.params.id, allowed);
+    if (!task) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    let warning;
+    const statusChanged = Boolean(body.status) && before.status !== task.status;
+    if (statusChanged) {
+      warning = await postStatusToSlackThread(task);
+    }
+
+    return res.json({ ok: true, task, warning: warning || undefined });
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to patch task: ' + String(error?.message || error) });
   }
-
-  return res.json({ ok: true, task });
 });
 
 app.post('/tasks/:id/commits', (req, res) => {

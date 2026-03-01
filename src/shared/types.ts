@@ -1,4 +1,4 @@
-export type TaskStatus = 'todo' | 'in_progress' | 'blocked' | 'done';
+export type TaskStatus = 'todo' | 'in_progress' | 'blocked' | 'review' | 'done';
 
 export interface TaskCommit {
   sha: string;
@@ -18,8 +18,13 @@ export interface Task {
   orderIndex: number;
   source?: string;
   sourceUrl?: string | null;
+  slackUserId?: string | null;
+  slackChannelId?: string | null;
+  slackThreadTs?: string | null;
   linkedFiles: string[];
   branchName?: string | null;
+  prUrl?: string | null;
+  autoCloseOnMerge?: boolean;
   commits?: TaskCommit[];
   ai_title?: string | null;
   ai_summary?: string | null;
@@ -40,4 +45,5 @@ export interface TaskListResponse {
 
 export interface TaskDetailResponse {
   task: Task;
+  warning?: string;
 }
