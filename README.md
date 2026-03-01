@@ -4,7 +4,9 @@ Local PM-to-developer workflow system with:
 
 - Slack ingestion (`POST /ingest/slack`)
 - SQLite as system of record
-- VS Code sidebar list + task detail editor webview
+- VS Code sidebar + task detail panel
+- Git execution flow (`Start Task` -> branch, `Open PR` -> review)
+- Slack thread status reporting on status changes
 
 ## Run
 
@@ -17,50 +19,76 @@ npm run build
 
 Then in VS Code run `Run Extension` (F5) and open ContextHUD.
 
-## Backend API (v0)
+## Required Env
+
+Copy `.env.example` to `.env` and set:
+
+- `SLACK_BOT_TOKEN`: bot token used for thread status updates (`chat.postMessage`)
+- `CONTEXTHUD_USER_HANDLE` (optional): local handle fallback for ingestion mapping
+
+## VS Code Settings
+
+In workspace `.vscode/settings.json`:
+
+```json
+{
+  "contexthud.apiBaseUrl": "http://localhost:8787",
+  "contexthud.git.branchPrefix": "ch",
+  "contexthud.git.baseBranch": "main",
+  "contexthud.git.commitPollIntervalSec": 15,
+  "contexthud.user.handle": "mayank"
+}
+```
+
+Notes:
+
+- `contexthud.user.handle` is optional.
+- If set, extension fetches `GET /tasks?assignee=<handle>`.
+- If unset, extension shows all tasks.
+
+## Backend API (P1.2)
 
 - `POST /ingest/slack`
-  - Ingests Slack task text (e.g. `@mayank [task] Fix login redirect #priority:high file:src/auth.ts`)
-  - Creates task in SQLite
-- `GET /tasks?assignee=me`
-  - Uses `x-current-user` header for `me`
+  - Ingests Slack text (e.g. `@mayank [task] Fix login redirect #priority:high file:src/auth.ts`)
+- `GET /tasks?assignee=<handle>`
+  - Optional assignee filtering
 - `GET /tasks/:id`
-  - Returns detailed task
 - `PATCH /tasks/:id`
-  - Updates status/title/description/linked files/branch
-- `POST /tasks/:id/ai/summarize`
-  - Stores AI-style structured fields (`ai_title`, `ai_summary`, `ai_acceptance_criteria`, `ai_open_questions`, `ai_tags`)
+  - Updates status/title/description/linked files/branch/prUrl/autoCloseOnMerge
+  - On status change, posts update to Slack thread when `slackChannelId` + `slackThreadTs` exist
+- `POST /tasks/:id/commits`
+  - Links commit to task
 
 Compatibility:
 
-- `POST /slack/nudge` still supported and routed to ingest behavior.
+- `POST /slack/nudge` remains supported.
 
-## Storage
+## Status Lifecycle
 
-SQLite file path:
+Allowed statuses:
 
-- `server/data/contexthud.db`
+- `todo`
+- `in_progress`
+- `blocked`
+- `review`
+- `done`
 
-Schema file:
+Transitions:
 
-- `server/sql/init.sql`
+- `Start Task` -> sets `in_progress`
+- `Open PR` -> opens compare URL, saves `prUrl`, sets `review`
+- `Done` button -> sets `done`
 
-Tables:
+Status changes are reported to Slack thread when metadata exists on task.
 
-- `tasks`
-- `task_links`
-- `task_comments`
+## Task Detail UI
 
-## VS Code UX (v0)
-
-- Sidebar: list only (title, status pill, timestamp/source)
-- Click task: opens `Task Detail` editor-tab webview
-- Task Detail actions:
-  - Start Task
-  - Mark status (Todo / In Progress / Blocked / Done)
-  - Open Slack Thread
-  - Ask AI (summarize)
-  - Save patch (title/description/linked files/branch)
+- Status action buttons: Todo / In Progress / Blocked / Review / Done
+- Prominent current status badge
+- `Start Task`
+- `Open PR`
+- `Auto-close when PR merges` checkbox (stored only)
+- Commit list
 
 ## Slack Text Conventions
 
@@ -72,7 +100,6 @@ Examples:
 ## Tests
 
 ```bash
-npm run test:server
-npm run build
+npm run test
 ```
  

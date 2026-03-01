@@ -19,6 +19,7 @@ interface DetailMessage {
   description?: string;
   branchName?: string;
   linkedFiles?: string;
+  autoCloseOnMerge?: boolean;
   sha?: string;
   filePath?: string;
 }
@@ -103,7 +104,8 @@ export class TaskDetailPanel {
         title: message.title,
         description: message.description,
         branchName: message.branchName,
-        linkedFiles
+        linkedFiles,
+        autoCloseOnMerge: message.autoCloseOnMerge
       });
       await this.afterMutation();
       return;
@@ -196,6 +198,7 @@ export class TaskDetailPanel {
       <button data-status="todo">Todo</button>
       <button data-status="in_progress">In Progress</button>
       <button data-status="blocked">Blocked</button>
+      <button data-status="review">Review</button>
       <button data-status="done">Done</button>
       <button id="openPr">Open PR</button>
       <button id="viewTaskDiff">View Task Diff</button>
@@ -221,6 +224,11 @@ export class TaskDetailPanel {
       <input id="branchName" />
     </div>
 
+    <label class="check-row">
+      <input type="checkbox" id="autoCloseOnMerge" />
+      <span>Auto-close when PR merges</span>
+    </label>
+
     <div><button id="save">Save Changes</button></div>
 
     <div class="block">
@@ -245,6 +253,7 @@ export class TaskDetailPanel {
     const description = document.getElementById('description');
     const linkedFiles = document.getElementById('linkedFiles');
     const branchName = document.getElementById('branchName');
+    const autoCloseOnMerge = document.getElementById('autoCloseOnMerge');
 
     document.getElementById('start').addEventListener('click', () => vscode.postMessage({ type: 'startTask' }));
     document.getElementById('openPr').addEventListener('click', () => vscode.postMessage({ type: 'openPr' }));
@@ -258,7 +267,8 @@ export class TaskDetailPanel {
         title: title.value,
         description: description.value,
         linkedFiles: linkedFiles.value,
-        branchName: branchName.value
+        branchName: branchName.value,
+        autoCloseOnMerge: autoCloseOnMerge.checked
       });
     });
 

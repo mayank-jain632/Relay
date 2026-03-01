@@ -2,7 +2,6 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { SidebarProvider } from './SidebarProvider';
 import { Task } from './shared/types';
-import { getCurrentUser } from './shared/userMap';
 import { getWorkspaceRelativePath, normalizeFilePath, prioritizeByFile, sortByOrder } from './shared/taskUtils';
 import { TaskDetailPanel } from './TaskDetailPanel';
 import { addTaskCommit, fetchTaskList, getTaskById, patchTask } from './api/client';
@@ -140,18 +139,19 @@ function maybeShowSecondarySidebarOnboarding(context: vscode.ExtensionContext): 
   );
 }
 
+function getConfiguredHandle(): string | undefined {
+  const handle = vscode.workspace.getConfiguration('contexthud').get<string>('user.handle', '').trim();
+  return handle || undefined;
+}
+
 async function refreshTasks(sidebar: SidebarProvider): Promise<void> {
-  const configuredUser = await getCurrentUser();
+  const assigneeHandle = getConfiguredHandle();
 
   try {
-    const data = await fetchTaskList();
-    const active = data.tasks.filter((task) => task.status !== 'done');
-
-    const privateFiltered = configuredUser
-      ? active.filter((task) => sameIdentity(task.assignee_id, configuredUser))
-      : active;
-
-    currentTasks = sortByOrder(privateFiltered);
+    const data = await fetchTaskList(assigneeHandle);
+    const pending = sortByOrder(data.tasks.filter((task) => task.status !== 'done'));
+    const completed = sortByOrder(data.tasks.filter((task) => task.status === 'done'));
+    currentTasks = [...pending, ...completed];
     sidebar.updateTasks(currentTasks);
   } catch (error) {
     const retry = 'Retry';
@@ -248,7 +248,7 @@ async function startTask(taskId: string): Promise<Task> {
   const branchName = buildBranchName(prefix || 'ch', task.id, task.title || task.description);
 
   const result = await checkoutOrCreateBranch(repoRoot, branchName);
-  const updated = await patchTask(taskId, {
+  const updated = await patchTaskRequest(taskId, {
     branchName,
     status: 'in_progress'
   });
@@ -288,6 +288,11 @@ async function openPr(taskId: string): Promise<void> {
   }
 
   await vscode.env.openExternal(vscode.Uri.parse(compareUrl));
+  await patchTaskRequest(taskId, {
+    prUrl: compareUrl,
+    status: 'review'
+  });
+  vscode.window.showInformationMessage('Opened PR compare view and moved task to review.');
 }
 
 function resolveTaskFileUri(filePath: string): vscode.Uri {

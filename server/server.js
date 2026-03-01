@@ -92,20 +92,20 @@ function ingestSlackPayload(payload) {
   const parsed = parseSlackTaskText(payload.text || '');
   let assignee = resolveAssignee(parsed.assigneeRef);
 
-  const normalizedToken = String(parsed.assigneeRef || '').trim().replace(/^@/, '').toLowerCase();
-  const normalizedSender = String(payload.user_name || '').trim().replace(/^@/, '').toLowerCase();
+  if (!assignee && normalizedConfiguredHandle && normalizedToken === normalizedConfiguredHandle) {
+    assignee = configuredHandle;
+  }
 
   if (!assignee && normalizedToken && normalizedToken === normalizedSender) {
     assignee = resolveAssignee(payload.user_id) || resolveAssignee(payload.user_name);
   }
 
-  if (!assignee) {
-    return {
-      ok: false,
-      response_type: 'ephemeral',
-      text: `No local user mapping found for ${parsed.assigneeRef}. Add it in .contexthud/users.json.`
-    };
-  }
+  return assignee || parsed.assigneeRef;
+}
+
+function ingestSlackPayload(payload) {
+  const parsed = parseSlackTaskText(payload.text || '');
+  const assignee = resolveAssigneeForPayload(parsed, payload);
 
   const task = createTask({
     assignee_id: assignee,
