@@ -1,7 +1,7 @@
 # Relay (Phase 0)
 
 Local PM-to-developer workflow system with:
-
+ 
 - Slack ingestion (`POST /ingest/slack`)
 - SQLite as system of record
 - VS Code sidebar list + task detail editor webview
