@@ -17,6 +17,77 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true });
 });
 
+function formatStatus(status) {
+  return String(status || 'todo').replace('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function buildStatusMessage(task) {
+  const assignee = task.assignee_id ? `@${task.assignee_id}` : 'assignee';
+  const statusLabel = formatStatus(task.status);
+  const branchPart = task.branchName ? ` (branch: ${task.branchName})` : '';
+
+  if (task.status === 'in_progress') {
+    return `🟦 ContextHUD: ${assignee} started this task -> ${statusLabel}${branchPart}`;
+  }
+
+  if (task.status === 'review') {
+    return `🟨 ContextHUD: PR opened -> ${statusLabel}${branchPart}`;
+  }
+
+  if (task.status === 'done') {
+    return `✅ ContextHUD: Marked ${statusLabel}${branchPart}`;
+  }
+
+  if (task.status === 'blocked') {
+    return `⛔ ContextHUD: Status updated -> ${statusLabel}${branchPart}`;
+  }
+
+  return `🔄 ContextHUD: Status updated -> ${statusLabel}${branchPart}`;
+}
+
+async function postStatusToSlack(task) {
+  const token = String(process.env.SLACK_BOT_TOKEN || '').trim();
+  if (!token) {
+    return null;
+  }
+
+  if (!task.slackChannelId) {
+    return null;
+  }
+
+  const payload = {
+    channel: task.slackChannelId,
+    text: buildStatusMessage(task)
+  };
+
+  if (task.slackThreadTs) {
+    payload.thread_ts = task.slackThreadTs;
+  }
+
+  try {
+    const response = await fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json; charset=utf-8'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      const reason = result?.error || `HTTP ${response.status}`;
+      console.error('[ContextHUD] Slack status post failed:', reason);
+      return `Slack status update failed: ${reason}`;
+    }
+
+    return null;
+  } catch (error) {
+    console.error('[ContextHUD] Slack status post failed:', error);
+    return `Slack status update failed: ${String(error.message || error)}`;
+  }
+}
+
 function ingestSlackPayload(payload) {
   const parsed = parseSlackTaskText(payload.text || '');
   let assignee = resolveAssignee(parsed.assigneeRef);
@@ -112,23 +183,39 @@ app.get('/tasks/:id', (req, res) => {
   return res.json({ task });
 });
 
-app.patch('/tasks/:id', (req, res) => {
-  const body = req.body || {};
-  const allowed = {
-    branchName: body.branchName,
-    description: body.description,
-    linkedFiles: body.linkedFiles,
-    priority: body.priority,
-    status: body.status,
-    title: body.title
-  };
+app.patch('/tasks/:id', async (req, res) => {
+  try {
+    const before = getTaskById(req.params.id);
+    if (!before) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
 
-  const task = patchTask(req.params.id, allowed);
-  if (!task) {
-    return res.status(404).json({ error: 'Task not found' });
+    const body = req.body || {};
+    const allowed = Object.fromEntries(
+      Object.entries({
+        branchName: body.branchName,
+        description: body.description,
+        linkedFiles: body.linkedFiles,
+        priority: body.priority,
+        status: body.status,
+        title: body.title
+      }).filter(([, value]) => value !== undefined)
+    );
+
+    const task = patchTask(req.params.id, allowed);
+    if (!task) {
+      return res.status(404).json({ error: 'Task not found' });
+    }
+
+    let warning;
+    if (allowed.status && before.status !== task.status) {
+      warning = await postStatusToSlack(task);
+    }
+
+    return res.json({ ok: true, task, warning: warning || undefined });
+  } catch (error) {
+    return res.status(500).json({ error: 'Failed to patch task: ' + String(error?.message || error) });
   }
-
-  return res.json({ ok: true, task });
 });
 
 app.post('/tasks/:id/commits', (req, res) => {
