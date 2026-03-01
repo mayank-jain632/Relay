@@ -818,24 +818,32 @@ function createApp() {
 async function start() {
   loadEnv();
 
-  try {
-    await initSchema();
-    await cleanupExpiredAuthArtifacts();
-    runtimeState.startupInitError = null;
-  } catch (error) {
-    runtimeState.startupInitError = error;
-    log('error', 'startup_init_failed', {
-      error: String(error?.message || error),
-      stack: String(error?.stack || '')
-    });
-  }
-
   const app = createApp();
   const port = Number(process.env.PORT || 8787);
   const server = http.createServer(app);
-  server.listen(port, () => {
-    log('info', 'server_listening', { port });
+
+  await new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(port, () => {
+      log('info', 'server_listening', { port });
+      resolve(undefined);
+    });
   });
+
+  void (async () => {
+    try {
+      await initSchema();
+      await cleanupExpiredAuthArtifacts();
+      runtimeState.startupInitError = null;
+      log('info', 'startup_init_ready');
+    } catch (error) {
+      runtimeState.startupInitError = error;
+      log('error', 'startup_init_failed', {
+        error: String(error?.message || error),
+        stack: String(error?.stack || '')
+      });
+    }
+  })();
 
   return { app, server };
 }
