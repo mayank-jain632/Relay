@@ -1,10 +1,18 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { SidebarProvider } from './SidebarProvider';
-import { Task } from './shared/types';
+import { RelayUser, Task } from './shared/types';
 import { getWorkspaceRelativePath, normalizeFilePath, prioritizeByFile, sortByOrder } from './shared/taskUtils';
 import { TaskDetailPanel } from './TaskDetailPanel';
-import { addTaskCommit, fetchTaskList, getTaskById, patchTask } from './api/client';
+import {
+  addTaskCommit,
+  fetchMe,
+  fetchTaskList,
+  getTaskById,
+  patchTask,
+  setAuthToken,
+  startVscodeLogin
+} from './api/client';
 import {
   buildBranchName,
   buildGitHubCompareUrl,
@@ -22,17 +30,32 @@ import {
 import { getActiveTaskId, setActiveTaskId } from './state/activeTask';
 
 let currentTasks: Task[] = [];
-let refreshPollHandle: NodeJS.Timeout | undefined;
+let refreshTimeoutHandle: NodeJS.Timeout | undefined;
 let commitPollHandle: NodeJS.Timeout | undefined;
 const lastSeenCommitByTask = new Map<string, string>();
 const linkedFilesPatchTimerByTask = new Map<string, NodeJS.Timeout>();
 const repoRootCacheByWorkspace = new Map<string, string | null>();
+
+let refreshBackoffMs = 5000;
+let loginInProgress = false;
+let authRequired = false;
+let authUser: RelayUser | undefined;
+let taskScope: 'my' | 'all' = 'all';
+
+const SESSION_TOKEN_KEY = 'contexthud.sessionToken.v1';
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const sidebar = new SidebarProvider();
   context.subscriptions.push(vscode.window.registerWebviewViewProvider(SidebarProvider.viewType, sidebar));
 
   maybeShowSecondarySidebarOnboarding(context);
+
+  const storedToken = await context.secrets.get(SESSION_TOKEN_KEY);
+  if (storedToken) {
+    setAuthToken(storedToken);
+  }
+
+  await refreshAuthState(context, sidebar);
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
@@ -58,14 +81,22 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         copyFileList
       },
       async () => {
-        await refreshTasks(sidebar);
+        await refreshTasks(sidebar, { interactive: false });
       }
     );
   });
 
+  sidebar.setOnSignIn(() => {
+    void startLoginFlow(context, sidebar);
+  });
+
+  sidebar.setOnSetScope((scope) => {
+    void setTaskScope(scope, sidebar);
+  });
+
   context.subscriptions.push(
     vscode.commands.registerCommand('contexthud.refresh', async () => {
-      await refreshTasks(sidebar);
+      await refreshTasks(sidebar, { interactive: true });
     })
   );
 
@@ -89,18 +120,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     })
   );
 
-  await refreshTasks(sidebar);
-
-  refreshPollHandle = setInterval(() => {
-    void refreshTasks(sidebar);
-  }, 5000);
+  await refreshTasks(sidebar, { interactive: false });
+  scheduleNextRefresh(sidebar, 5000);
 
   startCommitLinkPolling(context, sidebar);
 
   context.subscriptions.push({
     dispose: () => {
-      if (refreshPollHandle) {
-        clearInterval(refreshPollHandle);
+      if (refreshTimeoutHandle) {
+        clearTimeout(refreshTimeoutHandle);
       }
       if (commitPollHandle) {
         clearInterval(commitPollHandle);
@@ -114,8 +142,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 }
 
 export function deactivate(): void {
-  if (refreshPollHandle) {
-    clearInterval(refreshPollHandle);
+  if (refreshTimeoutHandle) {
+    clearTimeout(refreshTimeoutHandle);
   }
   if (commitPollHandle) {
     clearInterval(commitPollHandle);
@@ -139,27 +167,160 @@ function maybeShowSecondarySidebarOnboarding(context: vscode.ExtensionContext): 
   );
 }
 
+function updateSidebarAuthState(sidebar: SidebarProvider): void {
+  sidebar.updateAuthState({
+    user: authUser,
+    scope: taskScope,
+    authRequired,
+    loginInProgress
+  });
+}
+
+async function refreshAuthState(context: vscode.ExtensionContext, sidebar: SidebarProvider): Promise<void> {
+  try {
+    const me = await fetchMe();
+    authUser = me;
+    authRequired = false;
+    if (taskScope !== 'my') {
+      taskScope = 'my';
+    }
+  } catch {
+    authUser = undefined;
+    authRequired = true;
+    taskScope = 'all';
+    setAuthToken(undefined);
+    await context.secrets.delete(SESSION_TOKEN_KEY);
+  }
+
+  updateSidebarAuthState(sidebar);
+}
+
+async function startLoginFlow(context: vscode.ExtensionContext, sidebar: SidebarProvider): Promise<void> {
+  if (loginInProgress) {
+    return;
+  }
+
+  loginInProgress = true;
+  updateSidebarAuthState(sidebar);
+
+  try {
+    const started = await startVscodeLogin();
+    await vscode.env.openExternal(vscode.Uri.parse(started.loginUrl));
+
+    const deadline = Date.now() + 30_000;
+    let me: RelayUser | undefined;
+
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+
+      try {
+        const polled = await fetchMe(started.loginId);
+        if (!polled.sessionToken) {
+          continue;
+        }
+
+        setAuthToken(polled.sessionToken);
+        await context.secrets.store(SESSION_TOKEN_KEY, polled.sessionToken);
+        me = await fetchMe();
+        break;
+      } catch {
+        // keep polling until timeout
+      }
+    }
+
+    if (!me) {
+      void vscode.window.showWarningMessage('GitHub sign-in timed out. Try again.');
+      return;
+    }
+
+    authUser = me;
+    authRequired = false;
+    taskScope = 'my';
+    refreshBackoffMs = 5000;
+    updateSidebarAuthState(sidebar);
+    await refreshTasks(sidebar, { interactive: true });
+    void vscode.window.showInformationMessage(`Signed in as ${me.login}.`);
+  } catch (error) {
+    void vscode.window.showErrorMessage(`Sign-in failed: ${String(error)}`);
+  } finally {
+    loginInProgress = false;
+    updateSidebarAuthState(sidebar);
+  }
+}
+
+async function setTaskScope(scope: 'my' | 'all', sidebar: SidebarProvider): Promise<void> {
+  if (scope === 'my' && !authUser) {
+    void vscode.window.showWarningMessage('Sign in with GitHub first to use My Tasks.');
+    return;
+  }
+
+  taskScope = scope;
+  updateSidebarAuthState(sidebar);
+  await refreshTasks(sidebar, { interactive: false });
+}
+
 function getConfiguredHandle(): string | undefined {
   const handle = vscode.workspace.getConfiguration('contexthud').get<string>('user.handle', '').trim();
   return handle || undefined;
 }
 
-async function refreshTasks(sidebar: SidebarProvider): Promise<void> {
-  const assigneeHandle = getConfiguredHandle();
+interface RefreshOptions {
+  interactive: boolean;
+}
 
+function getTaskFetchParams(): { assignee?: string; assigned?: 'me' | 'all' } {
+  if (authUser) {
+    return { assigned: taskScope === 'my' ? 'me' : 'all' };
+  }
+
+  const assigneeHandle = getConfiguredHandle();
+  if (assigneeHandle) {
+    return { assignee: assigneeHandle };
+  }
+
+  return { assigned: 'all' };
+}
+
+async function refreshTasks(sidebar: SidebarProvider, options: RefreshOptions): Promise<void> {
   try {
-    const data = await fetchTaskList(assigneeHandle);
+    const data = await fetchTaskList(getTaskFetchParams());
     const pending = sortByOrder(data.tasks.filter((task) => task.status !== 'done'));
     const completed = sortByOrder(data.tasks.filter((task) => task.status === 'done'));
     currentTasks = [...pending, ...completed];
     sidebar.updateTasks(currentTasks);
+    refreshBackoffMs = 5000;
   } catch (error) {
-    const retry = 'Retry';
-    const picked = await vscode.window.showErrorMessage(`ContextHUD failed to fetch tasks: ${String(error)}`, retry);
-    if (picked === retry) {
-      await refreshTasks(sidebar);
+    const msg = String(error || 'Unknown error');
+
+    if (msg.includes('401')) {
+      authUser = undefined;
+      authRequired = true;
+      taskScope = 'all';
+      updateSidebarAuthState(sidebar);
+      if (options.interactive) {
+        void vscode.window.showWarningMessage('You are signed out. Use Sign in with GitHub in ContextHUD.');
+      }
+    } else if (options.interactive) {
+      const retry = 'Retry';
+      const picked = await vscode.window.showErrorMessage(`ContextHUD failed to fetch tasks: ${msg}`, retry);
+      if (picked === retry) {
+        await refreshTasks(sidebar, { interactive: true });
+      }
     }
+
+    refreshBackoffMs = Math.min(refreshBackoffMs * 2, 30000);
   }
+}
+
+function scheduleNextRefresh(sidebar: SidebarProvider, delayMs: number): void {
+  if (refreshTimeoutHandle) {
+    clearTimeout(refreshTimeoutHandle);
+  }
+
+  refreshTimeoutHandle = setTimeout(async () => {
+    await refreshTasks(sidebar, { interactive: false });
+    scheduleNextRefresh(sidebar, refreshBackoffMs);
+  }, delayMs);
 }
 
 function normalizeIdentity(value: string): string {
@@ -230,7 +391,7 @@ function scheduleLinkedFilesPatch(taskId: string, linkedFiles: string[], sidebar
   const timer = setTimeout(async () => {
     try {
       await patchTask(taskId, { linkedFiles });
-      await refreshTasks(sidebar);
+      await refreshTasks(sidebar, { interactive: false });
     } catch {
       // best effort
     } finally {
@@ -239,6 +400,12 @@ function scheduleLinkedFilesPatch(taskId: string, linkedFiles: string[], sidebar
   }, 400);
 
   linkedFilesPatchTimerByTask.set(taskId, timer);
+}
+
+async function patchTaskRequest(taskId: string, patch: Record<string, unknown>): Promise<Task> {
+  const updated = await patchTask(taskId, patch);
+  currentTasks = currentTasks.map((task) => (task.id === updated.id ? updated : task));
+  return updated;
 }
 
 async function startTask(taskId: string): Promise<Task> {
@@ -406,10 +573,7 @@ async function viewTaskDiffForTask(taskId: string): Promise<void> {
 }
 
 function startCommitLinkPolling(context: vscode.ExtensionContext, sidebar: SidebarProvider): void {
-  const intervalSec = Math.max(
-    5,
-    Number(vscode.workspace.getConfiguration('contexthud').get<number>('git.commitPollIntervalSec', 15))
-  );
+  const intervalSec = Math.max(5, Number(vscode.workspace.getConfiguration('contexthud').get<number>('git.commitPollIntervalSec', 15)));
 
   commitPollHandle = setInterval(() => {
     void pollActiveTaskCommit(context, sidebar);
@@ -462,7 +626,7 @@ async function pollActiveTaskCommit(context: vscode.ExtensionContext, sidebar: S
       }
     }
 
-    await refreshTasks(sidebar);
+    await refreshTasks(sidebar, { interactive: false });
   } catch {
     // best-effort polling; keep silent to avoid noisy UX
   }

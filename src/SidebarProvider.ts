@@ -1,9 +1,20 @@
 import * as vscode from 'vscode';
-import { Task } from './shared/types';
+import { RelayUser, Task } from './shared/types';
+
+type SidebarScope = 'my' | 'all';
 
 interface SidebarMessage {
-  type: 'openTask';
-  taskId: string;
+  type: 'openTask' | 'signIn' | 'setScope';
+  taskId?: string;
+  scope?: SidebarScope;
+}
+
+interface SidebarViewState {
+  tasks: Task[];
+  user?: RelayUser;
+  scope: SidebarScope;
+  loginInProgress: boolean;
+  authRequired: boolean;
 }
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
@@ -11,9 +22,25 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   private view?: vscode.WebviewView;
   private onOpenTask?: (taskId: string) => void;
+  private onSignIn?: () => void;
+  private onSetScope?: (scope: SidebarScope) => void;
+  private state: SidebarViewState = {
+    tasks: [],
+    scope: 'all',
+    loginInProgress: false,
+    authRequired: false
+  };
 
   setOnOpenTask(handler: (taskId: string) => void): void {
     this.onOpenTask = handler;
+  }
+
+  setOnSignIn(handler: () => void): void {
+    this.onSignIn = handler;
+  }
+
+  setOnSetScope(handler: (scope: SidebarScope) => void): void {
+    this.onSetScope = handler;
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -22,14 +49,42 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     view.webview.html = this.getHtml();
 
     view.webview.onDidReceiveMessage((message: SidebarMessage) => {
-      if (message.type === 'openTask' && this.onOpenTask) {
+      if (message.type === 'openTask' && message.taskId && this.onOpenTask) {
         this.onOpenTask(message.taskId);
+        return;
+      }
+
+      if (message.type === 'signIn' && this.onSignIn) {
+        this.onSignIn();
+        return;
+      }
+
+      if (message.type === 'setScope' && message.scope && this.onSetScope) {
+        this.onSetScope(message.scope);
       }
     });
+
+    this.postState();
   }
 
   updateTasks(tasks: Task[]): void {
-    this.view?.webview.postMessage({ type: 'tasksUpdate', tasks });
+    this.state.tasks = tasks;
+    this.postState();
+  }
+
+  updateAuthState(partial: Partial<Omit<SidebarViewState, 'tasks'>>): void {
+    this.state = {
+      ...this.state,
+      ...partial
+    };
+    this.postState();
+  }
+
+  private postState(): void {
+    this.view?.webview.postMessage({
+      type: 'state',
+      state: this.state
+    });
   }
 
   private getHtml(): string {
@@ -38,7 +93,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src https: data:; script-src 'nonce-${nonce}';" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
     :root {
@@ -56,6 +111,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       background: var(--bg);
       color: var(--ink);
     }
+    .header { border: 1px solid var(--border); border-radius: 8px; background: var(--panel); padding: 8px; margin-bottom: 8px; }
+    .user-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .user-meta { display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .avatar { width: 20px; height: 20px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.2); object-fit: cover; }
+    .login { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .sub { color: var(--muted); font-size: 10px; margin-top: 4px; }
+    .btn { border: 1px solid #2f9c90; background: #214741; color: #d6fff8; border-radius: 6px; padding: 4px 8px; font-size: 11px; cursor: pointer; }
+    .btn:disabled { opacity: 0.6; cursor: default; }
+    .filter { display: flex; gap: 6px; margin-top: 8px; }
+    .filter button { flex: 1; border: 1px solid var(--border); background: #1f2937; color: var(--ink); border-radius: 6px; font-size: 11px; padding: 5px 6px; cursor: pointer; }
+    .filter button.active { border-color: var(--accent); color: #e6fff8; }
     #list { display: flex; flex-direction: column; gap: 8px; }
     .item {
       border: 1px solid var(--border);
@@ -85,16 +151,73 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   </style>
 </head>
 <body>
+  <section class="header">
+    <div id="auth"></div>
+    <div class="filter">
+      <button id="scopeMy">My Tasks</button>
+      <button id="scopeAll">All Tasks</button>
+    </div>
+  </section>
   <div id="list"><div class="empty">No tasks assigned.</div></div>
   <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
     const list = document.getElementById('list');
+    const authNode = document.getElementById('auth');
+    const scopeMy = document.getElementById('scopeMy');
+    const scopeAll = document.getElementById('scopeAll');
 
     function escapeHtml(v) {
       return String(v || '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#039;');
     }
 
-    function render(tasks) {
+    scopeMy.addEventListener('click', () => vscode.postMessage({ type: 'setScope', scope: 'my' }));
+    scopeAll.addEventListener('click', () => vscode.postMessage({ type: 'setScope', scope: 'all' }));
+
+    function renderAuth(state) {
+      const user = state.user;
+      const isWaiting = !!state.loginInProgress;
+      const needsAuth = !!state.authRequired;
+
+      if (!user) {
+        authNode.innerHTML = [
+          '<div class="user-row">',
+          '  <div>',
+          '    <div class="login">Not signed in</div>',
+          needsAuth ? '    <div class="sub">Sign in to enable My Tasks by GitHub user.</div>' : '    <div class="sub">Viewing tasks without authentication.</div>',
+          '  </div>',
+          '  <button id="signin" class="btn" ' + (isWaiting ? 'disabled' : '') + '>' + (isWaiting ? 'Waiting…' : 'Sign in with GitHub') + '</button>',
+          '</div>'
+        ].join('');
+
+        const signInBtn = document.getElementById('signin');
+        if (signInBtn) {
+          signInBtn.addEventListener('click', () => vscode.postMessage({ type: 'signIn' }));
+        }
+      } else {
+        const avatar = user.avatarUrl ? '<img class="avatar" src="' + escapeHtml(user.avatarUrl) + '" />' : '<div class="avatar"></div>';
+        authNode.innerHTML = [
+          '<div class="user-row">',
+          '  <div class="user-meta">',
+          '    ' + avatar,
+          '    <div>',
+          '      <div class="login">' + escapeHtml(user.login) + '</div>',
+          '      <div class="sub">' + escapeHtml(user.name || 'Signed in') + '</div>',
+          '    </div>',
+          '  </div>',
+          '</div>'
+        ].join('');
+      }
+
+      scopeMy.classList.toggle('active', state.scope === 'my');
+      scopeAll.classList.toggle('active', state.scope === 'all');
+      scopeMy.disabled = !user;
+      if (!user && state.scope === 'my') {
+        scopeMy.classList.remove('active');
+        scopeAll.classList.add('active');
+      }
+    }
+
+    function renderTasks(tasks) {
       if (!Array.isArray(tasks) || tasks.length === 0) {
         list.innerHTML = '<div class="empty">No tasks assigned.</div>';
         return;
@@ -125,9 +248,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
 
     window.addEventListener('message', (event) => {
-      if (event.data?.type === 'tasksUpdate') {
-        render(event.data.tasks);
+      if (event.data?.type !== 'state' || !event.data?.state) {
+        return;
       }
+
+      const state = event.data.state;
+      renderAuth(state);
+      renderTasks(state.tasks || []);
     });
   </script>
 </body>

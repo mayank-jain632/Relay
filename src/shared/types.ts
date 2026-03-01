@@ -7,9 +7,24 @@ export interface TaskCommit {
   date: string;
 }
 
+export interface RelayUser {
+  userId: string;
+  githubId?: string;
+  login: string;
+  name?: string | null;
+  avatarUrl?: string | null;
+  email?: string | null;
+  sessionToken?: string;
+}
+
 export interface Task {
   id: string;
   assignee_id: string;
+  assignedToUserId?: string | null;
+  pendingSlackAssignee?: string | null;
+  createdByUserId?: string | null;
+  updatedByUserId?: string | null;
+  updatedBy?: RelayUser | null;
   title: string;
   description: string;
   status: TaskStatus;

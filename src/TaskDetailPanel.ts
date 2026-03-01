@@ -49,12 +49,9 @@ export class TaskDetailPanel {
       return;
     }
 
-    const panel = vscode.window.createWebviewPanel(
-      TaskDetailPanel.viewType,
-      `Task ${taskId.slice(0, 8)}`,
-      vscode.ViewColumn.Active,
-      { enableScripts: true }
-    );
+    const panel = vscode.window.createWebviewPanel(TaskDetailPanel.viewType, `Task ${taskId.slice(0, 8)}`, vscode.ViewColumn.Active, {
+      enableScripts: true
+    });
 
     const instance = new TaskDetailPanel(panel, taskId, api, onTaskChanged);
     TaskDetailPanel.panels.set(taskId, instance);
@@ -186,6 +183,7 @@ export class TaskDetailPanel {
     .status-todo { background: rgba(72, 158, 255, 0.2); color: #b7ddff; border: 1px solid rgba(72, 158, 255, 0.45); }
     .status-in-progress { background: rgba(227, 191, 64, 0.2); color: #ffe8a4; border: 1px solid rgba(227, 191, 64, 0.45); }
     .status-blocked { background: rgba(219, 72, 72, 0.2); color: #ffc2c2; border: 1px solid rgba(219, 72, 72, 0.5); }
+    .status-review { background: rgba(171, 113, 255, 0.2); color: #e3ccff; border: 1px solid rgba(171, 113, 255, 0.5); }
     .status-done { background: rgba(79, 194, 114, 0.22); color: #bff7d0; border: 1px solid rgba(79, 194, 114, 0.45); }
     button.active { border-color: #f5f7f9; box-shadow: 0 0 0 2px rgba(245, 247, 249, 0.35) inset; }
   </style>
@@ -193,6 +191,7 @@ export class TaskDetailPanel {
 <body>
   <div class="grid">
     <div class="status">Current Status: <span id="currentStatus" class="status-badge status-todo">TODO</span></div>
+    <div id="updatedMeta" class="muted">Updated by system</div>
     <div class="row">
       <button id="start">Start Task</button>
       <button data-status="todo">Todo</button>
@@ -285,6 +284,7 @@ export class TaskDetailPanel {
         todo: 'status-todo',
         in_progress: 'status-in-progress',
         blocked: 'status-blocked',
+        review: 'status-review',
         done: 'status-done'
       };
 
@@ -297,6 +297,21 @@ export class TaskDetailPanel {
           btn.classList.remove('active');
         }
       });
+    }
+
+    function renderUpdatedMeta(task) {
+      const updatedMeta = document.getElementById('updatedMeta');
+      const ts = task.updatedAt ? new Date(task.updatedAt).toLocaleString() : '';
+      if (task.updatedBy && task.updatedBy.login) {
+        updatedMeta.textContent = 'Updated by ' + task.updatedBy.login + (ts ? (' at ' + ts) : '');
+        return;
+      }
+
+      if (ts) {
+        updatedMeta.textContent = 'Updated at ' + ts;
+      } else {
+        updatedMeta.textContent = 'Updated by system';
+      }
     }
 
     function renderChangedFiles(files) {
@@ -355,7 +370,9 @@ export class TaskDetailPanel {
       description.value = task.description || '';
       linkedFiles.value = Array.isArray(task.linkedFiles) ? task.linkedFiles.join(', ') : '';
       branchName.value = task.branchName || '';
+      autoCloseOnMerge.checked = !!task.autoCloseOnMerge;
       setActiveStatus(task.status);
+      renderUpdatedMeta(task);
       renderChangedFiles(task.linkedFiles || []);
       renderCommits(task.commits || []);
     });

@@ -50,9 +50,23 @@ function mapTask(row) {
     return null;
   }
 
+  const updatedBy = row.updated_by_login
+    ? {
+        userId: row.updated_by_user_id,
+        login: row.updated_by_login,
+        name: row.updated_by_name,
+        avatarUrl: row.updated_by_avatar_url
+      }
+    : null;
+
   return {
     id: row.id,
     assignee_id: row.assignee_id,
+    assignedToUserId: row.assigned_to_user_id,
+    pendingSlackAssignee: row.pending_slack_assignee,
+    createdByUserId: row.created_by_user_id,
+    updatedByUserId: row.updated_by_user_id,
+    updatedBy,
     title: row.title,
     description: row.description,
     status: row.status,
@@ -79,19 +93,38 @@ function mapTask(row) {
   };
 }
 
-function listTasks(assignee) {
+function taskSelectSql() {
+  return `
+    SELECT t.*, u.login AS updated_by_login, u.name AS updated_by_name, u.avatar_url AS updated_by_avatar_url
+    FROM tasks t
+    LEFT JOIN users u ON u.id = t.updated_by_user_id
+  `;
+}
+
+function listTasks(options = {}) {
+  const assignee = options.assignee;
+  const assignedUserId = options.assignedUserId;
+
   let rows;
-  if (assignee) {
-    rows = all(`SELECT * FROM tasks WHERE assignee_id = ? ORDER BY order_index ASC, created_at DESC`, assignee);
+  if (assignedUserId) {
+    rows = all(
+      `${taskSelectSql()} WHERE t.assigned_to_user_id = ? ORDER BY t.order_index ASC, t.created_at DESC`,
+      assignedUserId
+    );
+  } else if (assignee) {
+    rows = all(
+      `${taskSelectSql()} WHERE t.assignee_id = ? ORDER BY t.order_index ASC, t.created_at DESC`,
+      assignee
+    );
   } else {
-    rows = all(`SELECT * FROM tasks ORDER BY assignee_id ASC, order_index ASC, created_at DESC`);
+    rows = all(`${taskSelectSql()} ORDER BY t.assignee_id ASC, t.order_index ASC, t.created_at DESC`);
   }
 
   return rows.map(mapTask);
 }
 
 function getTaskById(id) {
-  return mapTask(get(`SELECT * FROM tasks WHERE id = ?`, id));
+  return mapTask(get(`${taskSelectSql()} WHERE t.id = ?`, id));
 }
 
 function nextOrderIndex(assigneeId) {
@@ -108,13 +141,18 @@ function createTask(input) {
 
   run(
     `INSERT INTO tasks (
-      id, assignee_id, title, description, status, priority, due_date, order_index, source, source_url,
+      id, assignee_id, assigned_to_user_id, pending_slack_assignee, created_by_user_id, updated_by_user_id,
+      title, description, status, priority, due_date, order_index, source, source_url,
       slack_user_id, slack_channel_id, slack_thread_ts, linked_files, branch_name, pr_url, auto_close_on_merge, commits,
       ai_title, ai_summary, ai_acceptance_criteria, ai_open_questions, ai_tags,
       created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     id,
-    input.assignee_id,
+    input.assignee_id || null,
+    input.assignedToUserId || null,
+    input.pendingSlackAssignee || null,
+    input.createdByUserId || null,
+    input.updatedByUserId || null,
     input.title,
     input.description,
     input.status || 'todo',
@@ -153,16 +191,13 @@ function patchTask(id, patch) {
     return null;
   }
 
-  const definedPatch = Object.fromEntries(
-    Object.entries(patch || {}).filter(([, value]) => value !== undefined)
-  );
+  const definedPatch = Object.fromEntries(Object.entries(patch || {}).filter(([, value]) => value !== undefined));
 
   const next = {
     ...existing,
     ...definedPatch,
-    linkedFiles: definedPatch.linkedFiles !== undefined
-      ? normalizeLinkedFiles(definedPatch.linkedFiles)
-      : existing.linkedFiles,
+    linkedFiles:
+      definedPatch.linkedFiles !== undefined ? normalizeLinkedFiles(definedPatch.linkedFiles) : existing.linkedFiles,
     commits: definedPatch.commits ?? existing.commits,
     ai_acceptance_criteria: definedPatch.ai_acceptance_criteria ?? existing.ai_acceptance_criteria,
     ai_open_questions: definedPatch.ai_open_questions ?? existing.ai_open_questions,
@@ -171,10 +206,16 @@ function patchTask(id, patch) {
 
   run(
     `UPDATE tasks
-     SET title = ?, description = ?, status = ?, priority = ?, due_date = ?, linked_files = ?, branch_name = ?, pr_url = ?,
+     SET assignee_id = ?, assigned_to_user_id = ?, pending_slack_assignee = ?, created_by_user_id = ?, updated_by_user_id = ?,
+         title = ?, description = ?, status = ?, priority = ?, due_date = ?, linked_files = ?, branch_name = ?, pr_url = ?,
          auto_close_on_merge = ?, commits = ?, ai_title = ?, ai_summary = ?, ai_acceptance_criteria = ?, ai_open_questions = ?,
          ai_tags = ?, updated_at = ?
      WHERE id = ?`,
+    next.assignee_id || null,
+    next.assignedToUserId || null,
+    next.pendingSlackAssignee || null,
+    next.createdByUserId || null,
+    next.updatedByUserId || null,
     next.title,
     next.description,
     next.status,
@@ -210,6 +251,24 @@ function addCommit(id, commit) {
 
   const nextCommits = [commit, ...existing].slice(0, 100);
   return patchTask(id, { commits: nextCommits });
+}
+
+function backfillSlackAssigneeMapping(slackUserId, user) {
+  if (!slackUserId || !user?.userId) {
+    return;
+  }
+
+  run(
+    `UPDATE tasks
+     SET assigned_to_user_id = ?, assignee_id = ?, pending_slack_assignee = NULL, updated_by_user_id = ?, updated_at = ?
+     WHERE pending_slack_assignee = ? OR slack_user_id = ?`,
+    user.userId,
+    user.login,
+    user.userId,
+    new Date().toISOString(),
+    slackUserId,
+    slackUserId
+  );
 }
 
 function localAiSummarize(task) {
@@ -255,6 +314,7 @@ function summarizeTask(id) {
 
 module.exports = {
   addCommit,
+  backfillSlackAssigneeMapping,
   createTask,
   getTaskById,
   listTasks,

@@ -31,21 +31,95 @@ function getTableSql(tableName) {
   return String(row?.sql || '');
 }
 
+function recreateTaskChildTables() {
+  const hasTaskLinks = Boolean(getTableSql('task_links'));
+  const hasTaskComments = Boolean(getTableSql('task_comments'));
+
+  if (hasTaskLinks) {
+    db.exec('ALTER TABLE task_links RENAME TO task_links_old;');
+    db.exec(`
+      CREATE TABLE task_links (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id TEXT NOT NULL,
+        link_type TEXT NOT NULL,
+        url TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(task_id) REFERENCES tasks(id)
+      );
+    `);
+    db.exec(`
+      INSERT INTO task_links (id, task_id, link_type, url, created_at)
+      SELECT id, task_id, link_type, url, created_at FROM task_links_old;
+    `);
+    db.exec('DROP TABLE task_links_old;');
+  }
+
+  if (hasTaskComments) {
+    db.exec('ALTER TABLE task_comments RENAME TO task_comments_old;');
+    db.exec(`
+      CREATE TABLE task_comments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id TEXT NOT NULL,
+        author_id TEXT,
+        body TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY(task_id) REFERENCES tasks(id)
+      );
+    `);
+    db.exec(`
+      INSERT INTO task_comments (id, task_id, author_id, body, created_at)
+      SELECT id, task_id, author_id, body, created_at FROM task_comments_old;
+    `);
+    db.exec('DROP TABLE task_comments_old;');
+  }
+}
+
+function repairChildTablesIfReferencingTasksOld() {
+  const linksSql = getTableSql('task_links').toLowerCase();
+  const commentsSql = getTableSql('task_comments').toLowerCase();
+  const needsRepair = linksSql.includes('tasks_old') || commentsSql.includes('tasks_old');
+
+  if (!needsRepair) {
+    return;
+  }
+
+  db.exec('PRAGMA foreign_keys = OFF;');
+  db.exec('BEGIN;');
+
+  try {
+    recreateTaskChildTables();
+    db.exec('COMMIT;');
+  } catch (error) {
+    db.exec('ROLLBACK;');
+    throw error;
+  } finally {
+    db.exec('PRAGMA foreign_keys = ON;');
+  }
+}
+
 function rebuildTasksTableIfNeeded() {
   const tableSql = getTableSql('tasks').toLowerCase();
   if (!tableSql) {
     return;
   }
 
-  const needsReviewStatus = !tableSql.includes("'review'");
-  const needsPrUrl = !hasColumn('tasks', 'pr_url');
-  const needsAutoClose = !hasColumn('tasks', 'auto_close_on_merge');
+  const requiredColumns = [
+    'assigned_to_user_id',
+    'pending_slack_assignee',
+    'created_by_user_id',
+    'updated_by_user_id',
+    'pr_url',
+    'auto_close_on_merge'
+  ];
 
-  if (!needsReviewStatus && !needsPrUrl && !needsAutoClose) {
+  const sourceCols = new Set(db.prepare('PRAGMA table_info(tasks)').all().map((row) => row.name));
+  const missingColumn = requiredColumns.some((name) => !sourceCols.has(name));
+  const needsReviewStatus = !tableSql.includes("'review'");
+
+  if (!missingColumn && !needsReviewStatus) {
     return;
   }
 
-  const sourceCols = new Set(db.prepare('PRAGMA table_info(tasks)').all().map((row) => row.name));
   const selectOrDefault = (name, fallbackSql) => (sourceCols.has(name) ? name : `${fallbackSql} AS ${name}`);
 
   db.exec('PRAGMA foreign_keys = OFF;');
@@ -57,7 +131,11 @@ function rebuildTasksTableIfNeeded() {
     db.exec(`
       CREATE TABLE tasks (
         id TEXT PRIMARY KEY,
-        assignee_id TEXT NOT NULL,
+        assignee_id TEXT,
+        assigned_to_user_id TEXT,
+        pending_slack_assignee TEXT,
+        created_by_user_id TEXT,
+        updated_by_user_id TEXT,
         title TEXT NOT NULL,
         description TEXT NOT NULL,
         status TEXT NOT NULL CHECK (status IN ('todo', 'in_progress', 'blocked', 'review', 'done')),
@@ -80,20 +158,28 @@ function rebuildTasksTableIfNeeded() {
         ai_open_questions TEXT NOT NULL DEFAULT '[]',
         ai_tags TEXT NOT NULL DEFAULT '[]',
         created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY(assigned_to_user_id) REFERENCES users(id),
+        FOREIGN KEY(created_by_user_id) REFERENCES users(id),
+        FOREIGN KEY(updated_by_user_id) REFERENCES users(id)
       );
     `);
 
     const insertSql = `
       INSERT INTO tasks (
-        id, assignee_id, title, description, status, priority, due_date, order_index, source, source_url,
-        slack_user_id, slack_channel_id, slack_thread_ts, linked_files, branch_name, pr_url, auto_close_on_merge, commits,
-        ai_title, ai_summary, ai_acceptance_criteria, ai_open_questions, ai_tags,
+        id, assignee_id, assigned_to_user_id, pending_slack_assignee, created_by_user_id, updated_by_user_id,
+        title, description, status, priority, due_date, order_index, source, source_url,
+        slack_user_id, slack_channel_id, slack_thread_ts, linked_files, branch_name, pr_url, auto_close_on_merge,
+        commits, ai_title, ai_summary, ai_acceptance_criteria, ai_open_questions, ai_tags,
         created_at, updated_at
       )
       SELECT
         ${selectOrDefault('id', 'NULL')},
-        ${selectOrDefault('assignee_id', "''")},
+        ${selectOrDefault('assignee_id', 'NULL')},
+        ${selectOrDefault('assigned_to_user_id', 'NULL')},
+        ${selectOrDefault('pending_slack_assignee', 'NULL')},
+        ${selectOrDefault('created_by_user_id', 'NULL')},
+        ${selectOrDefault('updated_by_user_id', 'NULL')},
         ${selectOrDefault('title', "''")},
         ${selectOrDefault('description', "''")},
         CASE
@@ -125,6 +211,7 @@ function rebuildTasksTableIfNeeded() {
     `;
 
     db.exec(insertSql);
+    recreateTaskChildTables();
     db.exec('DROP TABLE tasks_old;');
     db.exec('COMMIT;');
   } catch (error) {
@@ -138,14 +225,23 @@ function rebuildTasksTableIfNeeded() {
 function initSchema() {
   const schemaPath = path.join(process.cwd(), 'server', 'sql', 'init.sql');
   const sql = fs.readFileSync(schemaPath, 'utf8');
-  db.exec(sql);
 
-  // Backward-compatible migrations for existing local DBs.
+  try {
+    db.exec(sql);
+  } catch {
+    // Existing DBs can fail during bootstrap before column backfills; continue with safe alters.
+  }
+
+  safeAlter(`ALTER TABLE tasks ADD COLUMN assigned_to_user_id TEXT`);
+  safeAlter(`ALTER TABLE tasks ADD COLUMN pending_slack_assignee TEXT`);
+  safeAlter(`ALTER TABLE tasks ADD COLUMN created_by_user_id TEXT`);
+  safeAlter(`ALTER TABLE tasks ADD COLUMN updated_by_user_id TEXT`);
   safeAlter(`ALTER TABLE tasks ADD COLUMN commits TEXT NOT NULL DEFAULT '[]'`);
   safeAlter(`ALTER TABLE tasks ADD COLUMN pr_url TEXT`);
   safeAlter(`ALTER TABLE tasks ADD COLUMN auto_close_on_merge INTEGER NOT NULL DEFAULT 0`);
 
   rebuildTasksTableIfNeeded();
+  repairChildTablesIfReferencingTasksOld();
   db.exec(sql);
 }
 
