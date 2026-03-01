@@ -6,10 +6,14 @@ import { getWorkspaceRelativePath, normalizeFilePath, prioritizeByFile, sortByOr
 import { TaskDetailPanel } from './TaskDetailPanel';
 import {
   addTaskCommit,
+  clearApiContext,
   fetchMe,
   fetchTaskList,
   getTaskById,
+  getApiContext,
   patchTask,
+  pollVscodeToken,
+  setApiContext,
   setAuthToken,
   startVscodeLogin
 } from './api/client';
@@ -28,6 +32,7 @@ import {
   showTaskDiff
 } from './git/git';
 import { getActiveTaskId, setActiveTaskId } from './state/activeTask';
+import { readRepoConfig, writeRepoConfig } from './shared/repoConfig';
 
 let currentTasks: Task[] = [];
 let refreshTimeoutHandle: NodeJS.Timeout | undefined;
@@ -41,12 +46,16 @@ let loginInProgress = false;
 let authRequired = false;
 let authUser: RelayUser | undefined;
 let taskScope: 'my' | 'all' = 'all';
+let configReady = false;
+let lastSyncAt: string | undefined;
 
 const SESSION_TOKEN_KEY = 'contexthud.sessionToken.v1';
+const diagnosticsOutput = vscode.window.createOutputChannel('ContextHUD Diagnostics');
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const sidebar = new SidebarProvider();
   context.subscriptions.push(vscode.window.registerWebviewViewProvider(SidebarProvider.viewType, sidebar));
+  context.subscriptions.push(diagnosticsOutput);
 
   maybeShowSecondarySidebarOnboarding(context);
 
@@ -55,11 +64,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     setAuthToken(storedToken);
   }
 
+  await loadRepoConfig(sidebar, { interactive: false });
   await refreshAuthState(context, sidebar);
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       repoRootCacheByWorkspace.clear();
+      void loadRepoConfig(sidebar, { interactive: false });
     })
   );
 
@@ -97,6 +108,27 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand('contexthud.refresh', async () => {
       await refreshTasks(sidebar, { interactive: true });
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('contexthud.initializeProjectConfig', async () => {
+      try {
+        const config = await writeRepoConfig();
+        setApiContext({ apiBaseUrl: config.apiBaseUrl, projectId: config.projectId });
+        configReady = true;
+        refreshBackoffMs = 5000;
+        void vscode.window.showInformationMessage(`ContextHUD initialized for project ${config.projectId}.`);
+        await refreshTasks(sidebar, { interactive: true });
+      } catch (error) {
+        void vscode.window.showErrorMessage(`ContextHUD initialization failed: ${String(error)}`);
+      }
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('contexthud.diagnostics', async () => {
+      await runDiagnostics();
     })
   );
 
@@ -167,6 +199,30 @@ function maybeShowSecondarySidebarOnboarding(context: vscode.ExtensionContext): 
   );
 }
 
+async function loadRepoConfig(sidebar: SidebarProvider, options: { interactive: boolean }): Promise<void> {
+  const config = await readRepoConfig();
+  if (!config) {
+    configReady = false;
+    clearApiContext();
+    currentTasks = [];
+    sidebar.updateTasks([]);
+    if (options.interactive) {
+      const action = 'Initialize ContextHUD for this repo';
+      const selected = await vscode.window.showWarningMessage(
+        'ContextHUD config missing. Create .contexthud/config.json to continue.',
+        action
+      );
+      if (selected === action) {
+        await vscode.commands.executeCommand('contexthud.initializeProjectConfig');
+      }
+    }
+    return;
+  }
+
+  configReady = true;
+  setApiContext({ apiBaseUrl: config.apiBaseUrl, projectId: config.projectId });
+}
+
 function updateSidebarAuthState(sidebar: SidebarProvider): void {
   sidebar.updateAuthState({
     user: authUser,
@@ -178,6 +234,14 @@ function updateSidebarAuthState(sidebar: SidebarProvider): void {
 
 async function refreshAuthState(context: vscode.ExtensionContext, sidebar: SidebarProvider): Promise<void> {
   try {
+    if (!configReady) {
+      authUser = undefined;
+      authRequired = true;
+      taskScope = 'all';
+      updateSidebarAuthState(sidebar);
+      return;
+    }
+
     const me = await fetchMe();
     authUser = me;
     authRequired = false;
@@ -200,6 +264,13 @@ async function startLoginFlow(context: vscode.ExtensionContext, sidebar: Sidebar
     return;
   }
 
+  if (!configReady) {
+    await loadRepoConfig(sidebar, { interactive: true });
+    if (!configReady) {
+      return;
+    }
+  }
+
   loginInProgress = true;
   updateSidebarAuthState(sidebar);
 
@@ -214,17 +285,17 @@ async function startLoginFlow(context: vscode.ExtensionContext, sidebar: Sidebar
       await new Promise((resolve) => setTimeout(resolve, 1500));
 
       try {
-        const polled = await fetchMe(started.loginId);
-        if (!polled.sessionToken) {
+        const polled = await pollVscodeToken(started.loginId);
+        if (!polled?.token) {
           continue;
         }
 
-        setAuthToken(polled.sessionToken);
-        await context.secrets.store(SESSION_TOKEN_KEY, polled.sessionToken);
+        setAuthToken(polled.token);
+        await context.secrets.store(SESSION_TOKEN_KEY, polled.token);
         me = await fetchMe();
         break;
       } catch {
-        // keep polling until timeout
+        // continue polling
       }
     }
 
@@ -259,29 +330,26 @@ async function setTaskScope(scope: 'my' | 'all', sidebar: SidebarProvider): Prom
   await refreshTasks(sidebar, { interactive: false });
 }
 
-function getConfiguredHandle(): string | undefined {
-  const handle = vscode.workspace.getConfiguration('contexthud').get<string>('user.handle', '').trim();
-  return handle || undefined;
-}
-
 interface RefreshOptions {
   interactive: boolean;
 }
 
-function getTaskFetchParams(): { assignee?: string; assigned?: 'me' | 'all' } {
+function getTaskFetchParams(): { assigned: 'me' | 'all' } {
   if (authUser) {
     return { assigned: taskScope === 'my' ? 'me' : 'all' };
-  }
-
-  const assigneeHandle = getConfiguredHandle();
-  if (assigneeHandle) {
-    return { assignee: assigneeHandle };
   }
 
   return { assigned: 'all' };
 }
 
 async function refreshTasks(sidebar: SidebarProvider, options: RefreshOptions): Promise<void> {
+  if (!configReady) {
+    await loadRepoConfig(sidebar, { interactive: options.interactive });
+    if (!configReady) {
+      return;
+    }
+  }
+
   try {
     const data = await fetchTaskList(getTaskFetchParams());
     const pending = sortByOrder(data.tasks.filter((task) => task.status !== 'done'));
@@ -289,6 +357,7 @@ async function refreshTasks(sidebar: SidebarProvider, options: RefreshOptions): 
     currentTasks = [...pending, ...completed];
     sidebar.updateTasks(currentTasks);
     refreshBackoffMs = 5000;
+    lastSyncAt = new Date().toISOString();
   } catch (error) {
     const msg = String(error || 'Unknown error');
 
@@ -299,6 +368,10 @@ async function refreshTasks(sidebar: SidebarProvider, options: RefreshOptions): 
       updateSidebarAuthState(sidebar);
       if (options.interactive) {
         void vscode.window.showWarningMessage('You are signed out. Use Sign in with GitHub in ContextHUD.');
+      }
+    } else if (msg.includes('403')) {
+      if (options.interactive) {
+        void vscode.window.showWarningMessage('You are not a member of this project.');
       }
     } else if (options.interactive) {
       const retry = 'Retry';
@@ -321,16 +394,6 @@ function scheduleNextRefresh(sidebar: SidebarProvider, delayMs: number): void {
     await refreshTasks(sidebar, { interactive: false });
     scheduleNextRefresh(sidebar, refreshBackoffMs);
   }, delayMs);
-}
-
-function normalizeIdentity(value: string): string {
-  return String(value || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '');
-}
-
-function sameIdentity(a: string, b: string): boolean {
-  return normalizeIdentity(a) === normalizeIdentity(b);
 }
 
 function getWorkspaceFsPath(): string {
@@ -445,7 +508,7 @@ async function openPr(taskId: string): Promise<void> {
   }
 
   const remote = await getRemoteOriginUrl(repoRoot);
-  const configuredBase = vscode.workspace.getConfiguration('contexthud').get<string>('git.baseBranch', 'main') || 'main';
+  const configuredBase = (await readRepoConfig())?.baseBranch || vscode.workspace.getConfiguration('contexthud').get<string>('git.baseBranch', 'main') || 'main';
   const baseBranch = await detectBaseBranch(repoRoot, configuredBase);
   const compareUrl = buildGitHubCompareUrl(remote, baseBranch, task.branchName);
 
@@ -561,7 +624,7 @@ async function viewTaskDiffForTask(taskId: string): Promise<void> {
     return;
   }
 
-  const baseBranch = vscode.workspace.getConfiguration('contexthud').get<string>('git.baseBranch', 'main') || 'main';
+  const baseBranch = (await readRepoConfig())?.baseBranch || vscode.workspace.getConfiguration('contexthud').get<string>('git.baseBranch', 'main') || 'main';
   const content = await showTaskDiff(repoRoot, baseBranch, task.branchName);
   const header = `# Task Diff\n# Base: ${baseBranch}\n# Branch: ${task.branchName}\n\n`;
 
@@ -630,6 +693,45 @@ async function pollActiveTaskCommit(context: vscode.ExtensionContext, sidebar: S
   } catch {
     // best-effort polling; keep silent to avoid noisy UX
   }
+}
+
+async function runDiagnostics(): Promise<void> {
+  diagnosticsOutput.clear();
+  diagnosticsOutput.appendLine('ContextHUD Diagnostics');
+  diagnosticsOutput.appendLine(`time: ${new Date().toISOString()}`);
+
+  const config = await readRepoConfig();
+  diagnosticsOutput.appendLine(`config.loaded: ${Boolean(config)}`);
+  diagnosticsOutput.appendLine(`config.apiBaseUrl: ${config?.apiBaseUrl || '<missing>'}`);
+  diagnosticsOutput.appendLine(`config.projectId: ${config?.projectId || '<missing>'}`);
+  diagnosticsOutput.appendLine(`config.baseBranch: ${config?.baseBranch || '<missing>'}`);
+  diagnosticsOutput.appendLine(`user.login: ${authUser?.login || '<not signed in>'}`);
+  diagnosticsOutput.appendLine(`task.scope: ${taskScope}`);
+  diagnosticsOutput.appendLine(`last.syncAt: ${lastSyncAt || '<never>'}`);
+
+  try {
+    const repoRoot = await getRepoRootCached();
+    diagnosticsOutput.appendLine(`repo.root: ${repoRoot}`);
+    const branch = await getCurrentBranch(repoRoot);
+    diagnosticsOutput.appendLine(`repo.branch: ${branch}`);
+  } catch (error) {
+    diagnosticsOutput.appendLine(`repo.error: ${String(error)}`);
+  }
+
+  try {
+    const context = getApiContext();
+    if (context) {
+      const response = await fetch(`${context.apiBaseUrl}/health`);
+      diagnosticsOutput.appendLine(`backend.health.status: ${response.status}`);
+      diagnosticsOutput.appendLine(`backend.health.body: ${await response.text()}`);
+    } else {
+      diagnosticsOutput.appendLine('backend.health: skipped (missing API context)');
+    }
+  } catch (error) {
+    diagnosticsOutput.appendLine(`backend.health.error: ${String(error)}`);
+  }
+
+  diagnosticsOutput.show(true);
 }
 
 function applySubtleGlow(editor: vscode.TextEditor): void {

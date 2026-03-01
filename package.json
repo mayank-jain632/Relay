@@ -35,6 +35,14 @@
       {
         "command": "contexthud.refresh",
         "title": "ContextHUD: Refresh"
+      },
+      {
+        "command": "contexthud.initializeProjectConfig",
+        "title": "ContextHUD: Initialize Project Config"
+      },
+      {
+        "command": "contexthud.diagnostics",
+        "title": "ContextHUD: Run Diagnostics"
       }
     ],
     "configuration": {
@@ -85,11 +93,14 @@
     "test": "npm run test:server && npm run build",
     "test:server": "node --test server/test/*.test.js",
     "db:migrate": "node server/scripts/migrate.js",
-    "server:start": "node server/server.js"
+    "server:start": "node server/server.js",
+    "start": "node server/server.js",
+    "railway:start": "node server/server.js"
   },
   "dependencies": {
     "express": "^4.21.2",
-    "uuid": "^11.1.0"
+    "uuid": "^11.1.0",
+    "pg": "^8.13.3"
   },
   "devDependencies": {
     "@types/node": "^22.13.8",

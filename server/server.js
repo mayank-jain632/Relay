@@ -1,10 +1,10 @@
+const crypto = require('crypto');
 const http = require('http');
 const express = require('express');
-const fs = require('fs');
-const path = require('path');
-const { initSchema } = require('./lib/db');
 const { parseNudgeInput, parseSlackTaskText } = require('./lib/slack-parser');
+const { loadEnv } = require('./lib/env');
 const { resolveAssignee } = require('./lib/user-map');
+const { healthCheck, initSchema, query } = require('./lib/db');
 const {
   addCommit,
   backfillSlackAssigneeMapping,
@@ -16,95 +16,67 @@ const {
   summarizeTask
 } = require('./lib/task-repo');
 const {
-  cleanupExpiredAuthArtifacts,
-  cleanupExpiredSessions,
-  consumeOAuthState,
-  consumeVscodeLoginAttempt,
-  createOAuthState,
-  createSession,
-  createVscodeLoginAttempt,
-  deleteSession,
-  completeVscodeLoginAttempt,
-  getUserFromSessionToken
-} = require('./lib/auth-repo');
-const {
+  addProjectMember,
+  createProject,
   getUserById,
   getUserByLogin,
+  isProjectMember,
   resolveMappedUserBySlackId,
   upsertGitHubUser,
   upsertSlackUserMap
 } = require('./lib/user-repo');
+const {
+  cleanupExpiredAuthArtifacts,
+  completeVscodeLoginAttempt,
+  consumeOAuthState,
+  consumeVscodeLoginAttempt,
+  createOAuthState,
+  createVscodeLoginAttempt,
+  signAuthToken,
+  verifyAuthToken
+} = require('./lib/auth-repo');
 
-function loadDotEnv() {
-  const envPath = path.join(process.cwd(), '.env');
-  if (!fs.existsSync(envPath)) {
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function log(level, message, meta = {}) {
+  const payload = {
+    level,
+    message,
+    time: nowIso(),
+    ...meta
+  };
+
+  const line = JSON.stringify(payload);
+  if (level === 'error') {
+    console.error(line);
     return;
   }
 
-  const raw = fs.readFileSync(envPath, 'utf8');
-  for (const line of raw.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) {
-      continue;
-    }
-
-    const eq = trimmed.indexOf('=');
-    if (eq === -1) {
-      continue;
-    }
-
-    const key = trimmed.slice(0, eq).trim();
-    const value = trimmed.slice(eq + 1).trim();
-    if (!key || process.env[key] !== undefined) {
-      continue;
-    }
-
-    process.env[key] = value;
-  }
+  console.log(line);
 }
 
-loadDotEnv();
-initSchema();
-cleanupExpiredSessions();
-cleanupExpiredAuthArtifacts();
-
-const app = express();
-app.use(express.json());
-app.use(express.urlencoded({ extended: false }));
-
-app.use((req, res, next) => {
-  const origin = String(req.headers.origin || '*');
-  res.setHeader('Access-Control-Allow-Origin', origin);
-  res.setHeader('Vary', 'Origin');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Vscode-Login-Id');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,OPTIONS');
-
-  if (req.method === 'OPTIONS') {
-    return res.sendStatus(204);
-  }
-
-  return next();
-});
-
-const httpServer = http.createServer(app);
-
-const appBaseUrl = String(process.env.APP_BASE_URL || `http://localhost:${process.env.PORT || 8787}`).replace(/\/$/, '');
+function makeRequestId() {
+  return crypto.randomBytes(8).toString('hex');
+}
 
 function getBearerToken(req) {
   const authHeader = String(req.headers.authorization || '');
   if (!authHeader.startsWith('Bearer ')) {
     return undefined;
   }
+
   return authHeader.slice('Bearer '.length).trim();
 }
 
-function getAuthenticatedUser(req) {
-  const token = getBearerToken(req);
-  if (!token) {
-    return null;
+function requireEnv(name) {
+  const value = String(process.env[name] || '').trim();
+  if (!value) {
+    throw new Error(`${name} is required.`);
   }
 
-  return getUserFromSessionToken(token);
+  return value;
 }
 
 function formatStatus(status) {
@@ -163,16 +135,49 @@ async function postStatusToSlack(task) {
 
     const result = await response.json();
     if (!response.ok || !result.ok) {
-      const reason = result?.error || `HTTP ${response.status}`;
-      console.error('[ContextHUD] Slack status post failed:', reason);
-      return `Slack status update failed: ${reason}`;
+      return `Slack status update failed: ${result?.error || `HTTP ${response.status}`}`;
     }
 
     return null;
   } catch (error) {
-    console.error('[ContextHUD] Slack status post failed:', error);
-    return `Slack status update failed: ${String(error.message || error)}`;
+    return `Slack status update failed: ${String(error?.message || error)}`;
   }
+}
+
+function verifySlackSignature(req) {
+  const signingSecret = String(process.env.SLACK_SIGNING_SECRET || '').trim();
+  if (!signingSecret) {
+    return false;
+  }
+
+  const timestamp = String(req.headers['x-slack-request-timestamp'] || '').trim();
+  const signature = String(req.headers['x-slack-signature'] || '').trim();
+  const rawBody = String(req.rawBody || '');
+
+  if (!timestamp || !signature || !rawBody) {
+    return false;
+  }
+
+  const ts = Number(timestamp);
+  if (!Number.isFinite(ts)) {
+    return false;
+  }
+
+  const ageSec = Math.abs(Date.now() / 1000 - ts);
+  if (ageSec > 300) {
+    return false;
+  }
+
+  const base = `v0:${timestamp}:${rawBody}`;
+  const digest = `v0=${crypto.createHmac('sha256', signingSecret).update(base).digest('hex')}`;
+
+  const sigBuf = Buffer.from(signature);
+  const digestBuf = Buffer.from(digest);
+  if (sigBuf.length !== digestBuf.length) {
+    return false;
+  }
+
+  return crypto.timingSafeEqual(sigBuf, digestBuf);
 }
 
 function renderAuthSuccessPage() {
@@ -197,18 +202,7 @@ function renderAuthSuccessPage() {
 </html>`;
 }
 
-function requireGitHubEnv() {
-  const missing = [];
-  if (!process.env.GITHUB_CLIENT_ID) missing.push('GITHUB_CLIENT_ID');
-  if (!process.env.GITHUB_CLIENT_SECRET) missing.push('GITHUB_CLIENT_SECRET');
-  if (!process.env.SESSION_SECRET) missing.push('SESSION_SECRET');
-
-  if (missing.length > 0) {
-    throw new Error(`Missing required env vars: ${missing.join(', ')}`);
-  }
-}
-
-async function exchangeGitHubCodeForToken(code) {
+async function exchangeGitHubCodeForToken(code, appBaseUrl) {
   const response = await fetch('https://github.com/login/oauth/access_token', {
     method: 'POST',
     headers: {
@@ -216,8 +210,8 @@ async function exchangeGitHubCodeForToken(code) {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      client_id: process.env.GITHUB_CLIENT_ID,
-      client_secret: process.env.GITHUB_CLIENT_SECRET,
+      client_id: requireEnv('GITHUB_CLIENT_ID'),
+      client_secret: requireEnv('GITHUB_CLIENT_SECRET'),
       code,
       redirect_uri: `${appBaseUrl}/auth/github/callback`
     })
@@ -225,7 +219,7 @@ async function exchangeGitHubCodeForToken(code) {
 
   const data = await response.json();
   if (!response.ok || !data.access_token) {
-    throw new Error(`GitHub token exchange failed: ${data.error || response.status}`);
+    throw new Error(`GitHub token exchange failed: ${data?.error || response.status}`);
   }
 
   return String(data.access_token);
@@ -274,46 +268,32 @@ async function fetchGitHubProfile(accessToken) {
   };
 }
 
-function resolveAssigneeFromSlack(parsed, payload) {
-  const legacyAssignee = resolveAssignee(parsed.assigneeRef) || parsed.assigneeRef;
-
-  const mappedUser =
-    resolveMappedUserBySlackId(parsed.assigneeRef) ||
-    resolveMappedUserBySlackId(payload.user_id) ||
-    resolveMappedUserBySlackId(payload.user_name);
-
-  if (mappedUser) {
-    return {
-      assignedToUserId: mappedUser.userId,
-      assigneeId: mappedUser.login,
-      pendingSlackAssignee: null
-    };
-  }
-
-  return {
-    assignedToUserId: null,
-    assigneeId: legacyAssignee,
-    pendingSlackAssignee: parsed.assigneeRef || null
-  };
-}
-
-function ingestSlackPayload(payload) {
+async function ingestSlackTask(projectId, payload) {
   const parsed = parseSlackTaskText(payload.text || '');
-  const assignment = resolveAssigneeFromSlack(parsed, payload);
 
-  const task = createTask({
-    assignee_id: assignment.assigneeId,
-    assignedToUserId: assignment.assignedToUserId,
-    pendingSlackAssignee: assignment.pendingSlackAssignee,
+  const mapped =
+    (await resolveMappedUserBySlackId(projectId, parsed.assigneeRef)) ||
+    (await resolveMappedUserBySlackId(projectId, payload.user_id));
+
+  const fallbackAssignee = resolveAssignee(parsed.assigneeRef) || parsed.assigneeRef;
+  const assigneeId = mapped?.login || fallbackAssignee;
+  const assignedToUserId = mapped?.userId || null;
+
+  const task = await createTask({
+    projectId,
+    assignee_id: assigneeId,
+    assignedToUserId,
+    pendingSlackAssignee: mapped ? null : parsed.assigneeRef,
     createdByUserId: null,
     updatedByUserId: null,
     description: parsed.description,
     dueDate: parsed.dueDate,
     linkedFiles: parsed.linkedFiles,
-    orderIndex: nextOrderIndex(assignment.assigneeId || parsed.assigneeRef),
+    orderIndex: await nextOrderIndex(projectId, assigneeId),
     priority: parsed.priority || 'normal',
     slackChannelId: payload.channel_id || null,
     slackThreadTs: payload.thread_ts || null,
+    slackWorkspaceId: payload.team_id || null,
     slackUserId: parsed.assigneeRef || null,
     source: 'slack',
     sourceUrl: payload.response_url || null,
@@ -321,293 +301,521 @@ function ingestSlackPayload(payload) {
     title: parsed.title
   });
 
+  await query(
+    `INSERT INTO slack_project_config (project_id, slack_workspace_id, default_channel_id, created_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT(project_id)
+     DO UPDATE SET
+       slack_workspace_id = COALESCE(EXCLUDED.slack_workspace_id, slack_project_config.slack_workspace_id),
+       default_channel_id = COALESCE(EXCLUDED.default_channel_id, slack_project_config.default_channel_id)`,
+    [projectId, payload.team_id || null, payload.channel_id || null]
+  );
+
   return {
     ok: true,
     response_type: 'in_channel',
     task,
-    text: `Task created for ${task.assignee_id || parsed.assigneeRef}: ${task.title}`
+    text: `Task created for ${task.assignee_id}: ${task.title}`
   };
 }
 
-app.get('/health', (_req, res) => {
-  res.json({ ok: true });
-});
+function createApp() {
+  loadEnv();
 
-app.post('/auth/vscode/start', (_req, res) => {
-  try {
-    requireGitHubEnv();
-    const attempt = createVscodeLoginAttempt();
-    const loginUrl = `${appBaseUrl}/auth/github/login?source=vscode&loginId=${encodeURIComponent(attempt.id)}`;
-    return res.json({ ok: true, loginId: attempt.id, loginUrl });
-  } catch (error) {
-    return res.status(500).json({ error: String(error.message || error) });
-  }
-});
+  const app = express();
+  app.disable('x-powered-by');
 
-app.get('/auth/github/login', (req, res) => {
-  try {
-    requireGitHubEnv();
-
-    const source = String(req.query.source || '').trim() || null;
-    const loginId = String(req.query.loginId || '').trim() || null;
-    const state = createOAuthState(source, loginId);
-    const redirectUri = `${appBaseUrl}/auth/github/callback`;
-
-    const url = new URL('https://github.com/login/oauth/authorize');
-    url.searchParams.set('client_id', String(process.env.GITHUB_CLIENT_ID));
-    url.searchParams.set('redirect_uri', redirectUri);
-    url.searchParams.set('scope', 'read:user user:email');
-    url.searchParams.set('state', state);
-
-    return res.redirect(url.toString());
-  } catch (error) {
-    return res.status(500).send(String(error.message || error));
-  }
-});
-
-app.get('/auth/github/callback', async (req, res) => {
-  try {
-    requireGitHubEnv();
-
-    const code = String(req.query.code || '').trim();
-    const state = String(req.query.state || '').trim();
-
-    if (!code || !state) {
-      return res.status(400).send('Missing code or state.');
-    }
-
-    const oauthState = consumeOAuthState(state);
-    if (!oauthState) {
-      return res.status(400).send('Invalid or expired OAuth state.');
-    }
-
-    const accessToken = await exchangeGitHubCodeForToken(code);
-    const profile = await fetchGitHubProfile(accessToken);
-    const user = upsertGitHubUser(profile);
-    const session = createSession(user.userId);
-
-    if (oauthState.source === 'vscode' && oauthState.login_id) {
-      completeVscodeLoginAttempt(oauthState.login_id, user.userId, session.token);
-      return res.status(200).send(renderAuthSuccessPage());
-    }
-
-    return res.json({ ok: true, sessionToken: session.token, user });
-  } catch (error) {
-    console.error('[ContextHUD] OAuth callback failed:', error);
-    return res.status(500).send(`OAuth callback failed: ${String(error.message || error)}`);
-  }
-});
-
-app.post('/auth/logout', (req, res) => {
-  const token = getBearerToken(req);
-  if (token) {
-    deleteSession(token);
-  }
-  return res.json({ ok: true });
-});
-
-app.get('/me', (req, res) => {
-  const user = getAuthenticatedUser(req);
-  if (user) {
-    return res.json(user);
-  }
-
-  const loginId = String(req.headers['x-vscode-login-id'] || '').trim();
-  if (loginId) {
-    const completed = consumeVscodeLoginAttempt(loginId);
-    if (!completed) {
-      return res.status(401).json({ error: 'Not authenticated yet.' });
-    }
-
-    const linkedUser = getUserById(completed.userId);
-    if (!linkedUser) {
-      return res.status(401).json({ error: 'Authentication failed.' });
-    }
-
-    return res.json({ ...linkedUser, sessionToken: completed.sessionToken });
-  }
-
-  return res.status(401).json({ error: 'Not authenticated' });
-});
-
-app.post('/admin/map/slack-user', (req, res) => {
-  try {
-    const slackUserId = String(req.body?.slackUserId || '').trim();
-    const githubLogin = String(req.body?.githubLogin || '').trim().toLowerCase() || null;
-    const githubUserId = String(req.body?.githubUserId || '').trim() || null;
-
-    if (!slackUserId) {
-      return res.status(400).json({ error: 'slackUserId is required.' });
-    }
-
-    let user = null;
-    if (githubUserId) {
-      user = getUserById(githubUserId);
-    }
-    if (!user && githubLogin) {
-      user = getUserByLogin(githubLogin);
-    }
-
-    if (!user) {
-      return res.status(404).json({ error: 'GitHub user not found. Sign in once to create the user record first.' });
-    }
-
-    const mapping = upsertSlackUserMap(slackUserId, user);
-    backfillSlackAssigneeMapping(slackUserId, user);
-    return res.json({ ok: true, mapping });
-  } catch (error) {
-    return res.status(500).json({ error: String(error.message || error) });
-  }
-});
-
-app.post('/ingest/slack', (req, res) => {
-  try {
-    const result = ingestSlackPayload(req.body || {});
-    return res.status(200).json(result);
-  } catch (error) {
-    return res.status(200).json({
-      ok: false,
-      response_type: 'ephemeral',
-      text: error.message
-    });
-  }
-});
-
-app.post('/slack/nudge', (req, res) => {
-  try {
-    const parsed = parseNudgeInput(req.body.text || '');
-    const syntheticPayload = {
-      ...req.body,
-      text: `@${parsed.slackUserId} [task] ${parsed.description} file:${parsed.filePath}`
-    };
-
-    const result = ingestSlackPayload(syntheticPayload);
-    return res.status(200).json(result);
-  } catch (error) {
-    return res.status(200).json({
-      ok: false,
-      response_type: 'ephemeral',
-      text: error.message
-    });
-  }
-});
-
-app.get('/tasks', (req, res) => {
-  try {
-    const authUser = getAuthenticatedUser(req);
-    const assigned = String(req.query.assigned || '').trim().toLowerCase();
-    const assigneeQuery = String(req.query.assignee || '').trim();
-
-    if (assigned === 'me') {
-      if (!authUser) {
-        return res.status(401).json({ error: 'Authentication required for assigned=me' });
+  app.use(
+    express.json({
+      verify: (req, _res, buf) => {
+        req.rawBody = buf?.toString('utf8') || '';
       }
-      return res.json({ tasks: listTasks({ assignedUserId: authUser.userId }) });
+    })
+  );
+
+  app.use(
+    express.urlencoded({
+      extended: false,
+      verify: (req, _res, buf) => {
+        req.rawBody = buf?.toString('utf8') || '';
+      }
+    })
+  );
+
+  app.use((req, res, next) => {
+    const requestId = makeRequestId();
+    req.requestId = requestId;
+    res.setHeader('x-request-id', requestId);
+
+    const origin = String(req.headers.origin || '*');
+    res.setHeader('Access-Control-Allow-Origin', origin);
+    res.setHeader('Vary', 'Origin');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Vscode-Login-Id, X-Admin-Api-Key');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,OPTIONS');
+
+    if (req.method === 'OPTIONS') {
+      return res.sendStatus(204);
     }
 
-    if (assigned === 'all') {
-      return res.json({ tasks: listTasks() });
-    }
+    const started = Date.now();
+    res.on('finish', () => {
+      log('info', 'request', {
+        requestId,
+        method: req.method,
+        path: req.path,
+        status: res.statusCode,
+        durationMs: Date.now() - started
+      });
+    });
 
-    if (assigneeQuery) {
-      return res.json({ tasks: listTasks({ assignee: assigneeQuery }) });
-    }
-
-    if (authUser) {
-      return res.json({ tasks: listTasks({ assignedUserId: authUser.userId }) });
-    }
-
-    return res.json({ tasks: listTasks() });
-  } catch (error) {
-    return res.status(500).json({ error: `Failed to load tasks: ${error.message}` });
-  }
-});
-
-app.get('/tasks/:id', (req, res) => {
-  const task = getTaskById(req.params.id);
-  if (!task) {
-    return res.status(404).json({ error: 'Task not found' });
-  }
-  return res.json({ task });
-});
-
-app.patch('/tasks/:id', async (req, res) => {
-  try {
-    const before = getTaskById(req.params.id);
-    if (!before) {
-      return res.status(404).json({ error: 'Task not found' });
-    }
-
-    const body = req.body || {};
-    const authUser = getAuthenticatedUser(req);
-
-    const allowed = Object.fromEntries(
-      Object.entries({
-        assignee_id: body.assignee_id,
-        assignedToUserId: body.assignedToUserId,
-        autoCloseOnMerge: body.autoCloseOnMerge,
-        branchName: body.branchName,
-        description: body.description,
-        linkedFiles: body.linkedFiles,
-        pendingSlackAssignee: body.pendingSlackAssignee,
-        prUrl: body.prUrl,
-        priority: body.priority,
-        status: body.status,
-        title: body.title,
-        updatedByUserId: authUser?.userId || before.updatedByUserId || null
-      }).filter(([, value]) => value !== undefined)
-    );
-
-    const task = patchTask(req.params.id, allowed);
-    if (!task) {
-      return res.status(404).json({ error: 'Task not found' });
-    }
-
-    let warning;
-    if (allowed.status && before.status !== task.status) {
-      warning = await postStatusToSlack(task);
-    }
-
-    return res.json({ ok: true, task, warning: warning || undefined });
-  } catch (error) {
-    return res.status(500).json({ error: 'Failed to patch task: ' + String(error?.message || error) });
-  }
-});
-
-app.post('/tasks/:id/commits', (req, res) => {
-  const body = req.body || {};
-  if (!body.sha) {
-    return res.status(400).json({ error: 'sha is required' });
-  }
-
-  const task = addCommit(req.params.id, {
-    sha: String(body.sha),
-    message: String(body.message || ''),
-    author: String(body.author || ''),
-    date: String(body.date || new Date().toISOString())
+    next();
   });
 
-  if (!task) {
-    return res.status(404).json({ error: 'Task not found' });
+  const appBaseUrl = String(process.env.APP_BASE_URL || `http://localhost:${process.env.PORT || 8787}`).replace(/\/$/, '');
+
+  async function requireAuth(req, res, next) {
+    try {
+      const token = getBearerToken(req);
+      if (!token) {
+        return res.status(401).json({ error: 'Missing bearer token' });
+      }
+
+      const user = await verifyAuthToken(token);
+      if (!user) {
+        return res.status(401).json({ error: 'Invalid or expired token' });
+      }
+
+      req.user = user;
+      next();
+    } catch (error) {
+      next(error);
+    }
   }
 
-  return res.json({ ok: true, task });
-});
+  async function requireProjectMembership(req, res, next) {
+    try {
+      const projectId = String(req.params.projectId || '').trim();
+      if (!projectId) {
+        return res.status(400).json({ error: 'projectId is required' });
+      }
 
-app.post('/tasks/:id/ai/summarize', (req, res) => {
-  const task = summarizeTask(req.params.id);
-  if (!task) {
-    return res.status(404).json({ error: 'Task not found' });
+      const member = await isProjectMember(projectId, req.user.userId);
+      if (!member) {
+        return res.status(403).json({ error: 'Not a project member' });
+      }
+
+      next();
+    } catch (error) {
+      next(error);
+    }
   }
 
-  return res.json({ ok: true, task });
-});
+  function requireAdmin(req, res, next) {
+    const expected = String(process.env.ADMIN_API_KEY || '').trim();
+    const actual = String(req.headers['x-admin-api-key'] || '').trim();
+    if (!expected || !actual || expected !== actual) {
+      return res.status(401).json({ error: 'Invalid admin key' });
+    }
+    return next();
+  }
 
-const port = Number(process.env.PORT || 8787);
-httpServer.listen(port, () => {
-  console.log(`ContextHUD server listening on ${port}`);
-});
+  app.get('/health', async (_req, res, next) => {
+    try {
+      const connected = await healthCheck();
+      return res.json({ ok: true, db: connected ? 'connected' : 'disconnected' });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post('/auth/vscode/start', async (_req, res, next) => {
+    try {
+      requireEnv('GITHUB_CLIENT_ID');
+      requireEnv('GITHUB_CLIENT_SECRET');
+      requireEnv('SESSION_SECRET');
+
+      const attempt = await createVscodeLoginAttempt();
+      const loginUrl = `${appBaseUrl}/auth/github/login?source=vscode&loginId=${encodeURIComponent(attempt.id)}`;
+      return res.json({ ok: true, loginId: attempt.id, loginUrl });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.get('/auth/github/login', async (req, res, next) => {
+    try {
+      requireEnv('GITHUB_CLIENT_ID');
+      requireEnv('GITHUB_CLIENT_SECRET');
+      requireEnv('SESSION_SECRET');
+
+      const source = String(req.query.source || '').trim() || null;
+      const loginId = String(req.query.loginId || '').trim() || null;
+      const state = await createOAuthState(source, loginId);
+
+      const url = new URL('https://github.com/login/oauth/authorize');
+      url.searchParams.set('client_id', requireEnv('GITHUB_CLIENT_ID'));
+      url.searchParams.set('redirect_uri', `${appBaseUrl}/auth/github/callback`);
+      url.searchParams.set('scope', 'read:user user:email');
+      url.searchParams.set('state', state);
+
+      return res.redirect(url.toString());
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.get('/auth/github/callback', async (req, res, next) => {
+    try {
+      const code = String(req.query.code || '').trim();
+      const state = String(req.query.state || '').trim();
+
+      if (!code || !state) {
+        return res.status(400).send('Missing code or state.');
+      }
+
+      const oauthState = await consumeOAuthState(state);
+      if (!oauthState) {
+        return res.status(400).send('Invalid or expired OAuth state.');
+      }
+
+      const accessToken = await exchangeGitHubCodeForToken(code, appBaseUrl);
+      const profile = await fetchGitHubProfile(accessToken);
+      const user = await upsertGitHubUser(profile);
+      const token = signAuthToken(user);
+
+      if (oauthState.source === 'vscode' && oauthState.login_id) {
+        await completeVscodeLoginAttempt(oauthState.login_id, user.userId, token);
+        return res.status(200).send(renderAuthSuccessPage());
+      }
+
+      return res.json({ ok: true, token, user });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.get('/auth/github/token', async (req, res, next) => {
+    try {
+      const loginId = String(req.query.loginId || '').trim();
+      const completed = await consumeVscodeLoginAttempt(loginId);
+      if (!completed) {
+        return res.status(401).json({ error: 'Not authenticated yet.' });
+      }
+
+      const user = await getUserById(completed.userId);
+      if (!user) {
+        return res.status(401).json({ error: 'Authentication failed.' });
+      }
+
+      return res.json({ ok: true, token: completed.token, user });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.get('/me', requireAuth, async (req, res) => {
+    res.json(req.user);
+  });
+
+  app.post('/admin/projects', requireAdmin, async (req, res, next) => {
+    try {
+      const name = String(req.body?.name || '').trim() || 'Untitled Project';
+      const project = await createProject(name);
+
+      const ownerLogin = String(req.body?.ownerGithubLogin || '').trim();
+      const ownerUserId = String(req.body?.ownerUserId || '').trim();
+
+      let owner = null;
+      if (ownerUserId) {
+        owner = await getUserById(ownerUserId);
+      }
+      if (!owner && ownerLogin) {
+        owner = await getUserByLogin(ownerLogin);
+      }
+
+      if (owner) {
+        await addProjectMember(project.id, owner.userId, 'owner');
+      }
+
+      return res.json({ ok: true, project });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post('/admin/projects/:projectId/members', requireAdmin, async (req, res, next) => {
+    try {
+      const projectId = String(req.params.projectId || '').trim();
+      const githubLogin = String(req.body?.githubLogin || '').trim();
+      const userId = String(req.body?.userId || '').trim();
+      const role = String(req.body?.role || 'member').trim();
+
+      let user = null;
+      if (userId) {
+        user = await getUserById(userId);
+      }
+      if (!user && githubLogin) {
+        user = await getUserByLogin(githubLogin);
+      }
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      const member = await addProjectMember(projectId, user.userId, role);
+      return res.json({ ok: true, member });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post('/admin/projects/:projectId/map/slack-user', requireAdmin, async (req, res, next) => {
+    try {
+      const projectId = String(req.params.projectId || '').trim();
+      const slackUserId = String(req.body?.slackUserId || '').trim();
+      const githubLogin = String(req.body?.githubLogin || '').trim();
+      const githubUserId = String(req.body?.githubUserId || '').trim();
+
+      if (!slackUserId) {
+        return res.status(400).json({ error: 'slackUserId is required' });
+      }
+
+      let user = null;
+      if (githubUserId) {
+        user = await getUserById(githubUserId);
+      }
+      if (!user && githubLogin) {
+        user = await getUserByLogin(githubLogin);
+      }
+      if (!user) {
+        return res.status(404).json({ error: 'GitHub user not found' });
+      }
+
+      const mapping = await upsertSlackUserMap(projectId, slackUserId, user);
+      await backfillSlackAssigneeMapping(projectId, slackUserId, user);
+      return res.json({ ok: true, mapping });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post('/ingest/slack/:projectId', async (req, res, next) => {
+    try {
+      if (!verifySlackSignature(req)) {
+        return res.status(401).json({ ok: false, error: 'invalid_slack_signature' });
+      }
+
+      const projectId = String(req.params.projectId || '').trim();
+      const response = await ingestSlackTask(projectId, req.body || {});
+      return res.status(200).json(response);
+    } catch (error) {
+      return res.status(200).json({ ok: false, response_type: 'ephemeral', text: String(error?.message || error) });
+    }
+  });
+
+  app.post('/ingest/slack-nudge/:projectId', async (req, res, next) => {
+    try {
+      if (!verifySlackSignature(req)) {
+        return res.status(401).json({ ok: false, error: 'invalid_slack_signature' });
+      }
+
+      const projectId = String(req.params.projectId || '').trim();
+      const parsed = parseNudgeInput(req.body.text || '');
+      const syntheticPayload = {
+        ...req.body,
+        text: `@${parsed.slackUserId} [task] ${parsed.description} file:${parsed.filePath}`
+      };
+
+      const response = await ingestSlackTask(projectId, syntheticPayload);
+      return res.status(200).json(response);
+    } catch (error) {
+      return res.status(200).json({ ok: false, response_type: 'ephemeral', text: String(error?.message || error) });
+    }
+  });
+
+  app.post('/slack/nudge', async (req, res) => {
+    const projectId = String(req.query.projectId || '').trim();
+    if (!projectId) {
+      return res.status(400).json({ ok: false, error: 'projectId query param is required' });
+    }
+
+    try {
+      const parsed = parseNudgeInput(req.body.text || '');
+      const syntheticPayload = {
+        ...req.body,
+        text: `@${parsed.slackUserId} [task] ${parsed.description} file:${parsed.filePath}`
+      };
+
+      const response = await ingestSlackTask(projectId, syntheticPayload);
+      return res.status(200).json(response);
+    } catch (error) {
+      return res.status(200).json({ ok: false, response_type: 'ephemeral', text: String(error?.message || error) });
+    }
+  });
+
+  app.get('/projects/:projectId/tasks', requireAuth, requireProjectMembership, async (req, res, next) => {
+    try {
+      const projectId = String(req.params.projectId || '').trim();
+      const assigned = String(req.query.assigned || 'me').trim().toLowerCase();
+
+      if (assigned === 'all') {
+        const tasks = await listTasks(projectId, {});
+        return res.json({ tasks });
+      }
+
+      const tasks = await listTasks(projectId, { assignedToUserId: req.user.userId });
+      return res.json({ tasks });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.get('/projects/:projectId/tasks/:taskId', requireAuth, requireProjectMembership, async (req, res, next) => {
+    try {
+      const projectId = String(req.params.projectId || '').trim();
+      const taskId = String(req.params.taskId || '').trim();
+      const task = await getTaskById(projectId, taskId);
+      if (!task) {
+        return res.status(404).json({ error: 'Task not found' });
+      }
+
+      return res.json({ task });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.patch('/projects/:projectId/tasks/:taskId', requireAuth, requireProjectMembership, async (req, res, next) => {
+    try {
+      const projectId = String(req.params.projectId || '').trim();
+      const taskId = String(req.params.taskId || '').trim();
+      const before = await getTaskById(projectId, taskId);
+      if (!before) {
+        return res.status(404).json({ error: 'Task not found' });
+      }
+
+      const body = req.body || {};
+      const allowed = Object.fromEntries(
+        Object.entries({
+          assignee_id: body.assignee_id,
+          assignedToUserId: body.assignedToUserId,
+          autoCloseOnMerge: body.autoCloseOnMerge,
+          branchName: body.branchName,
+          description: body.description,
+          linkedFiles: body.linkedFiles,
+          pendingSlackAssignee: body.pendingSlackAssignee,
+          prUrl: body.prUrl,
+          priority: body.priority,
+          status: body.status,
+          title: body.title,
+          updatedByUserId: req.user.userId
+        }).filter(([, value]) => value !== undefined)
+      );
+
+      const task = await patchTask(projectId, taskId, allowed);
+      if (!task) {
+        return res.status(404).json({ error: 'Task not found' });
+      }
+
+      let warning;
+      if (allowed.status && before.status !== task.status) {
+        warning = await postStatusToSlack(task);
+        if (warning) {
+          log('error', 'slack_status_post_failed', {
+            requestId: req.requestId,
+            taskId: task.id,
+            warning
+          });
+        }
+      }
+
+      return res.json({ ok: true, task, warning: warning || undefined });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post('/projects/:projectId/tasks/:taskId/commits', requireAuth, requireProjectMembership, async (req, res, next) => {
+    try {
+      const projectId = String(req.params.projectId || '').trim();
+      const taskId = String(req.params.taskId || '').trim();
+      const body = req.body || {};
+      if (!body.sha) {
+        return res.status(400).json({ error: 'sha is required' });
+      }
+
+      const task = await addCommit(projectId, taskId, {
+        sha: String(body.sha),
+        message: String(body.message || ''),
+        author: String(body.author || ''),
+        date: String(body.date || new Date().toISOString())
+      });
+
+      if (!task) {
+        return res.status(404).json({ error: 'Task not found' });
+      }
+
+      return res.json({ ok: true, task });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post('/projects/:projectId/tasks/:taskId/ai/summarize', requireAuth, requireProjectMembership, async (req, res, next) => {
+    try {
+      const projectId = String(req.params.projectId || '').trim();
+      const taskId = String(req.params.taskId || '').trim();
+      const task = await summarizeTask(projectId, taskId);
+      if (!task) {
+        return res.status(404).json({ error: 'Task not found' });
+      }
+
+      return res.json({ ok: true, task });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.use((error, req, res, _next) => {
+    log('error', 'request_failed', {
+      requestId: req.requestId,
+      method: req.method,
+      path: req.path,
+      error: String(error?.message || error)
+    });
+
+    const status = Number(error?.statusCode || error?.status || 500);
+    return res.status(status).json({
+      error: String(error?.message || 'Internal Server Error'),
+      requestId: req.requestId
+    });
+  });
+
+  return app;
+}
+
+async function start() {
+  loadEnv();
+  await initSchema();
+  await cleanupExpiredAuthArtifacts();
+
+  const app = createApp();
+  const port = Number(process.env.PORT || 8787);
+  const server = http.createServer(app);
+  server.listen(port, () => {
+    log('info', 'server_listening', { port });
+  });
+
+  return { app, server };
+}
+
+if (require.main === module) {
+  void start().catch((error) => {
+    log('error', 'startup_failed', { error: String(error?.message || error) });
+    process.exit(1);
+  });
+}
 
 module.exports = {
-  app
+  createApp,
+  start
 };

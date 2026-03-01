@@ -1,48 +1,51 @@
 const { v4: uuidv4 } = require('uuid');
-const { all, get, run } = require('./db');
+const { query } = require('./db');
 
-function safeJsonParse(text, fallback) {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return fallback;
-  }
-}
-
-function normalizeLinkedFiles(value) {
+function safeJson(value, fallback) {
   if (Array.isArray(value)) {
-    const out = [];
-    const seen = new Set();
-    for (const entry of value) {
-      const item = String(entry || '').trim();
-      if (!item) {
-        continue;
-      }
-      const key = item.toLowerCase();
-      if (seen.has(key)) {
-        continue;
-      }
-      seen.add(key);
-      out.push(item);
-    }
-    return out;
+    return value;
+  }
+
+  if (value === null || value === undefined) {
+    return fallback;
   }
 
   if (typeof value === 'string') {
-    const raw = value.trim();
-    if (!raw) {
-      return [];
+    try {
+      const parsed = JSON.parse(value);
+      return parsed;
+    } catch {
+      return fallback;
     }
-
-    const parsed = safeJsonParse(raw, null);
-    if (Array.isArray(parsed)) {
-      return normalizeLinkedFiles(parsed);
-    }
-
-    return normalizeLinkedFiles(raw.split(/[\n,]/g));
   }
 
-  return [];
+  return fallback;
+}
+
+function normalizeLinkedFiles(value) {
+  const arr = Array.isArray(value)
+    ? value
+    : typeof value === 'string'
+      ? value.split(/[\n,]/g)
+      : [];
+
+  const seen = new Set();
+  const out = [];
+
+  for (const file of arr) {
+    const cleaned = String(file || '').trim();
+    if (!cleaned) {
+      continue;
+    }
+    const key = cleaned.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    out.push(cleaned);
+  }
+
+  return out;
 }
 
 function mapTask(row) {
@@ -50,23 +53,22 @@ function mapTask(row) {
     return null;
   }
 
-  const updatedBy = row.updated_by_login
-    ? {
-        userId: row.updated_by_user_id,
-        login: row.updated_by_login,
-        name: row.updated_by_name,
-        avatarUrl: row.updated_by_avatar_url
-      }
-    : null;
-
   return {
     id: row.id,
+    projectId: row.project_id,
     assignee_id: row.assignee_id,
     assignedToUserId: row.assigned_to_user_id,
     pendingSlackAssignee: row.pending_slack_assignee,
     createdByUserId: row.created_by_user_id,
     updatedByUserId: row.updated_by_user_id,
-    updatedBy,
+    updatedBy: row.updated_by_login
+      ? {
+          userId: row.updated_by_user_id,
+          login: row.updated_by_login,
+          name: row.updated_by_name,
+          avatarUrl: row.updated_by_avatar_url
+        }
+      : null,
     title: row.title,
     description: row.description,
     status: row.status,
@@ -78,16 +80,17 @@ function mapTask(row) {
     slackUserId: row.slack_user_id,
     slackChannelId: row.slack_channel_id,
     slackThreadTs: row.slack_thread_ts,
-    linkedFiles: normalizeLinkedFiles(safeJsonParse(row.linked_files, row.linked_files || '[]')),
+    slackWorkspaceId: row.slack_workspace_id,
+    linkedFiles: normalizeLinkedFiles(safeJson(row.linked_files, [])),
     branchName: row.branch_name,
     prUrl: row.pr_url,
     autoCloseOnMerge: Boolean(row.auto_close_on_merge),
-    commits: safeJsonParse(row.commits, []),
+    commits: safeJson(row.commits, []),
     ai_title: row.ai_title,
     ai_summary: row.ai_summary,
-    ai_acceptance_criteria: safeJsonParse(row.ai_acceptance_criteria, []),
-    ai_open_questions: safeJsonParse(row.ai_open_questions, []),
-    ai_tags: safeJsonParse(row.ai_tags, []),
+    ai_acceptance_criteria: safeJson(row.ai_acceptance_criteria, []),
+    ai_open_questions: safeJson(row.ai_open_questions, []),
+    ai_tags: safeJson(row.ai_tags, []),
     timestamp: row.created_at,
     updatedAt: row.updated_at
   };
@@ -101,173 +104,202 @@ function taskSelectSql() {
   `;
 }
 
-function listTasks(options = {}) {
-  const assignee = options.assignee;
-  const assignedUserId = options.assignedUserId;
-
-  let rows;
-  if (assignedUserId) {
-    rows = all(
-      `${taskSelectSql()} WHERE t.assigned_to_user_id = ? ORDER BY t.order_index ASC, t.created_at DESC`,
-      assignedUserId
-    );
-  } else if (assignee) {
-    rows = all(
-      `${taskSelectSql()} WHERE t.assignee_id = ? ORDER BY t.order_index ASC, t.created_at DESC`,
-      assignee
-    );
-  } else {
-    rows = all(`${taskSelectSql()} ORDER BY t.assignee_id ASC, t.order_index ASC, t.created_at DESC`);
-  }
-
-  return rows.map(mapTask);
-}
-
-function getTaskById(id) {
-  return mapTask(get(`${taskSelectSql()} WHERE t.id = ?`, id));
-}
-
-function nextOrderIndex(assigneeId) {
-  const row = get(
-    `SELECT COALESCE(MAX(order_index), 0) AS max_order FROM tasks WHERE assignee_id = ? AND status != 'done'`,
-    assigneeId
+async function nextOrderIndex(projectId, assigneeId) {
+  const result = await query(
+    `SELECT COALESCE(MAX(order_index), 0) AS max_order
+     FROM tasks
+     WHERE project_id = $1 AND assignee_id = $2 AND status != 'done'`,
+    [projectId, assigneeId || 'unassigned']
   );
-  return Number(row?.max_order || 0) + 1;
+
+  return Number(result.rows[0]?.max_order || 0) + 1;
 }
 
-function createTask(input) {
-  const now = new Date().toISOString();
+async function createTask(input) {
   const id = input.id || uuidv4();
-
-  run(
+  await query(
     `INSERT INTO tasks (
-      id, assignee_id, assigned_to_user_id, pending_slack_assignee, created_by_user_id, updated_by_user_id,
+      id, project_id, assignee_id, assigned_to_user_id, pending_slack_assignee,
+      created_by_user_id, updated_by_user_id,
       title, description, status, priority, due_date, order_index, source, source_url,
-      slack_user_id, slack_channel_id, slack_thread_ts, linked_files, branch_name, pr_url, auto_close_on_merge, commits,
+      slack_user_id, slack_channel_id, slack_thread_ts, slack_workspace_id,
+      linked_files, branch_name, pr_url, auto_close_on_merge, commits,
       ai_title, ai_summary, ai_acceptance_criteria, ai_open_questions, ai_tags,
       created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    id,
-    input.assignee_id || null,
-    input.assignedToUserId || null,
-    input.pendingSlackAssignee || null,
-    input.createdByUserId || null,
-    input.updatedByUserId || null,
-    input.title,
-    input.description,
-    input.status || 'todo',
-    input.priority || null,
-    input.dueDate || null,
-    input.orderIndex,
-    input.source || 'slack',
-    input.sourceUrl || null,
-    input.slackUserId || null,
-    input.slackChannelId || null,
-    input.slackThreadTs || null,
-    JSON.stringify(normalizeLinkedFiles(input.linkedFiles || [])),
-    input.branchName || null,
-    input.prUrl || null,
-    input.autoCloseOnMerge ? 1 : 0,
-    JSON.stringify(input.commits || []),
-    input.ai_title || null,
-    input.ai_summary || null,
-    JSON.stringify(input.ai_acceptance_criteria || []),
-    JSON.stringify(input.ai_open_questions || []),
-    JSON.stringify(input.ai_tags || []),
-    now,
-    now
+    ) VALUES (
+      $1, $2, $3, $4, $5,
+      $6, $7,
+      $8, $9, $10, $11, $12, $13, $14, $15,
+      $16, $17, $18, $19,
+      $20::jsonb, $21, $22, $23, $24::jsonb,
+      $25, $26, $27::jsonb, $28::jsonb, $29::jsonb,
+      NOW(), NOW()
+    )`,
+    [
+      id,
+      input.projectId,
+      input.assignee_id || null,
+      input.assignedToUserId || null,
+      input.pendingSlackAssignee || null,
+      input.createdByUserId || null,
+      input.updatedByUserId || null,
+      input.title,
+      input.description,
+      input.status || 'todo',
+      input.priority || null,
+      input.dueDate || null,
+      input.orderIndex,
+      input.source || 'slack',
+      input.sourceUrl || null,
+      input.slackUserId || null,
+      input.slackChannelId || null,
+      input.slackThreadTs || null,
+      input.slackWorkspaceId || null,
+      JSON.stringify(normalizeLinkedFiles(input.linkedFiles || [])),
+      input.branchName || null,
+      input.prUrl || null,
+      Boolean(input.autoCloseOnMerge),
+      JSON.stringify(input.commits || []),
+      input.ai_title || null,
+      input.ai_summary || null,
+      JSON.stringify(input.ai_acceptance_criteria || []),
+      JSON.stringify(input.ai_open_questions || []),
+      JSON.stringify(input.ai_tags || [])
+    ]
   );
 
   if (input.sourceUrl) {
-    run(`INSERT INTO task_links (task_id, link_type, url, created_at) VALUES (?, ?, ?, ?)`, id, 'slack_thread', input.sourceUrl, now);
+    await query(
+      `INSERT INTO task_links (task_id, link_type, url, created_at)
+       VALUES ($1, $2, $3, NOW())`,
+      [id, 'slack_thread', input.sourceUrl]
+    );
   }
 
-  return getTaskById(id);
+  return getTaskById(input.projectId, id);
 }
 
-function patchTask(id, patch) {
-  const existing = getTaskById(id);
+async function getTaskById(projectId, taskId) {
+  const result = await query(`${taskSelectSql()} WHERE t.project_id = $1 AND t.id = $2 LIMIT 1`, [projectId, taskId]);
+  return mapTask(result.rows[0]);
+}
+
+async function listTasks(projectId, options = {}) {
+  if (options.assignedToUserId) {
+    const result = await query(
+      `${taskSelectSql()} WHERE t.project_id = $1 AND t.assigned_to_user_id = $2 ORDER BY t.order_index ASC, t.created_at DESC`,
+      [projectId, options.assignedToUserId]
+    );
+    return result.rows.map(mapTask);
+  }
+
+  const result = await query(
+    `${taskSelectSql()} WHERE t.project_id = $1 ORDER BY t.order_index ASC, t.created_at DESC`,
+    [projectId]
+  );
+
+  return result.rows.map(mapTask);
+}
+
+async function patchTask(projectId, taskId, patch) {
+  const existing = await getTaskById(projectId, taskId);
   if (!existing) {
     return null;
   }
 
-  const definedPatch = Object.fromEntries(Object.entries(patch || {}).filter(([, value]) => value !== undefined));
-
   const next = {
     ...existing,
-    ...definedPatch,
-    linkedFiles:
-      definedPatch.linkedFiles !== undefined ? normalizeLinkedFiles(definedPatch.linkedFiles) : existing.linkedFiles,
-    commits: definedPatch.commits ?? existing.commits,
-    ai_acceptance_criteria: definedPatch.ai_acceptance_criteria ?? existing.ai_acceptance_criteria,
-    ai_open_questions: definedPatch.ai_open_questions ?? existing.ai_open_questions,
-    ai_tags: definedPatch.ai_tags ?? existing.ai_tags
+    ...Object.fromEntries(Object.entries(patch || {}).filter(([, value]) => value !== undefined))
   };
 
-  run(
+  const linkedFiles = normalizeLinkedFiles(next.linkedFiles || []);
+  const commits = safeJson(next.commits, []);
+  const aiAcceptance = safeJson(next.ai_acceptance_criteria, []);
+  const aiOpenQuestions = safeJson(next.ai_open_questions, []);
+  const aiTags = safeJson(next.ai_tags, []);
+
+  await query(
     `UPDATE tasks
-     SET assignee_id = ?, assigned_to_user_id = ?, pending_slack_assignee = ?, created_by_user_id = ?, updated_by_user_id = ?,
-         title = ?, description = ?, status = ?, priority = ?, due_date = ?, linked_files = ?, branch_name = ?, pr_url = ?,
-         auto_close_on_merge = ?, commits = ?, ai_title = ?, ai_summary = ?, ai_acceptance_criteria = ?, ai_open_questions = ?,
-         ai_tags = ?, updated_at = ?
-     WHERE id = ?`,
-    next.assignee_id || null,
-    next.assignedToUserId || null,
-    next.pendingSlackAssignee || null,
-    next.createdByUserId || null,
-    next.updatedByUserId || null,
-    next.title,
-    next.description,
-    next.status,
-    next.priority || null,
-    next.dueDate || null,
-    JSON.stringify(normalizeLinkedFiles(next.linkedFiles || [])),
-    next.branchName || null,
-    next.prUrl || null,
-    next.autoCloseOnMerge ? 1 : 0,
-    JSON.stringify(next.commits || []),
-    next.ai_title || null,
-    next.ai_summary || null,
-    JSON.stringify(next.ai_acceptance_criteria || []),
-    JSON.stringify(next.ai_open_questions || []),
-    JSON.stringify(next.ai_tags || []),
-    new Date().toISOString(),
-    id
+     SET assignee_id = $1,
+         assigned_to_user_id = $2,
+         pending_slack_assignee = $3,
+         created_by_user_id = $4,
+         updated_by_user_id = $5,
+         title = $6,
+         description = $7,
+         status = $8,
+         priority = $9,
+         due_date = $10,
+         linked_files = $11::jsonb,
+         branch_name = $12,
+         pr_url = $13,
+         auto_close_on_merge = $14,
+         commits = $15::jsonb,
+         ai_title = $16,
+         ai_summary = $17,
+         ai_acceptance_criteria = $18::jsonb,
+         ai_open_questions = $19::jsonb,
+         ai_tags = $20::jsonb,
+         updated_at = NOW()
+     WHERE id = $21 AND project_id = $22`,
+    [
+      next.assignee_id || null,
+      next.assignedToUserId || null,
+      next.pendingSlackAssignee || null,
+      next.createdByUserId || null,
+      next.updatedByUserId || null,
+      next.title,
+      next.description,
+      next.status,
+      next.priority || null,
+      next.dueDate || null,
+      JSON.stringify(linkedFiles),
+      next.branchName || null,
+      next.prUrl || null,
+      Boolean(next.autoCloseOnMerge),
+      JSON.stringify(commits),
+      next.ai_title || null,
+      next.ai_summary || null,
+      JSON.stringify(aiAcceptance),
+      JSON.stringify(aiOpenQuestions),
+      JSON.stringify(aiTags),
+      taskId,
+      projectId
+    ]
   );
 
-  return getTaskById(id);
+  return getTaskById(projectId, taskId);
 }
 
-function addCommit(id, commit) {
-  const task = getTaskById(id);
+async function addCommit(projectId, taskId, commit) {
+  const task = await getTaskById(projectId, taskId);
   if (!task) {
     return null;
   }
 
-  const existing = task.commits || [];
-  if (existing.some((item) => item.sha === commit.sha)) {
+  const current = Array.isArray(task.commits) ? task.commits : [];
+  if (current.some((item) => item.sha === commit.sha)) {
     return task;
   }
 
-  const nextCommits = [commit, ...existing].slice(0, 100);
-  return patchTask(id, { commits: nextCommits });
+  const nextCommits = [commit, ...current].slice(0, 100);
+  return patchTask(projectId, taskId, { commits: nextCommits });
 }
 
-function backfillSlackAssigneeMapping(slackUserId, user) {
-  if (!slackUserId || !user?.userId) {
+async function backfillSlackAssigneeMapping(projectId, slackUserId, user) {
+  if (!projectId || !slackUserId || !user?.userId) {
     return;
   }
 
-  run(
+  await query(
     `UPDATE tasks
-     SET assigned_to_user_id = ?, assignee_id = ?, pending_slack_assignee = NULL, updated_by_user_id = ?, updated_at = ?
-     WHERE pending_slack_assignee = ? OR slack_user_id = ?`,
-    user.userId,
-    user.login,
-    user.userId,
-    new Date().toISOString(),
-    slackUserId,
-    slackUserId
+     SET assigned_to_user_id = $1,
+         assignee_id = $2,
+         pending_slack_assignee = NULL,
+         updated_by_user_id = $1,
+         updated_at = NOW()
+     WHERE project_id = $3 AND (pending_slack_assignee = $4 OR slack_user_id = $4)`,
+    [user.userId, user.login, projectId, slackUserId]
   );
 }
 
@@ -302,14 +334,14 @@ function localAiSummarize(task) {
   };
 }
 
-function summarizeTask(id) {
-  const existing = getTaskById(id);
+async function summarizeTask(projectId, taskId) {
+  const existing = await getTaskById(projectId, taskId);
   if (!existing) {
     return null;
   }
 
   const ai = localAiSummarize(existing);
-  return patchTask(id, ai);
+  return patchTask(projectId, taskId, ai);
 }
 
 module.exports = {

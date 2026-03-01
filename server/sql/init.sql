@@ -1,21 +1,43 @@
 CREATE TABLE IF NOT EXISTS users (
-  id TEXT PRIMARY KEY,
+  id UUID PRIMARY KEY,
   github_id TEXT UNIQUE,
   login TEXT UNIQUE NOT NULL,
   name TEXT,
   avatar_url TEXT,
   email TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS projects (
+  id UUID PRIMARY KEY,
+  name TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS project_members (
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  role TEXT NOT NULL DEFAULT 'member',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY(project_id, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS slack_project_config (
+  project_id UUID PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+  slack_workspace_id TEXT,
+  default_channel_id TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
-  id TEXT PRIMARY KEY,
+  id UUID PRIMARY KEY,
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   assignee_id TEXT,
-  assigned_to_user_id TEXT,
+  assigned_to_user_id UUID REFERENCES users(id),
   pending_slack_assignee TEXT,
-  created_by_user_id TEXT,
-  updated_by_user_id TEXT,
+  created_by_user_id UUID REFERENCES users(id),
+  updated_by_user_id UUID REFERENCES users(id),
   title TEXT NOT NULL,
   description TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('todo', 'in_progress', 'blocked', 'review', 'done')),
@@ -27,96 +49,61 @@ CREATE TABLE IF NOT EXISTS tasks (
   slack_user_id TEXT,
   slack_channel_id TEXT,
   slack_thread_ts TEXT,
-  linked_files TEXT NOT NULL DEFAULT '[]',
+  slack_workspace_id TEXT,
+  linked_files JSONB NOT NULL DEFAULT '[]'::jsonb,
   branch_name TEXT,
   pr_url TEXT,
-  auto_close_on_merge INTEGER NOT NULL DEFAULT 0,
-  commits TEXT NOT NULL DEFAULT '[]',
+  auto_close_on_merge BOOLEAN NOT NULL DEFAULT FALSE,
+  commits JSONB NOT NULL DEFAULT '[]'::jsonb,
   ai_title TEXT,
   ai_summary TEXT,
-  ai_acceptance_criteria TEXT NOT NULL DEFAULT '[]',
-  ai_open_questions TEXT NOT NULL DEFAULT '[]',
-  ai_tags TEXT NOT NULL DEFAULT '[]',
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  FOREIGN KEY(assigned_to_user_id) REFERENCES users(id),
-  FOREIGN KEY(created_by_user_id) REFERENCES users(id),
-  FOREIGN KEY(updated_by_user_id) REFERENCES users(id)
+  ai_acceptance_criteria JSONB NOT NULL DEFAULT '[]'::jsonb,
+  ai_open_questions JSONB NOT NULL DEFAULT '[]'::jsonb,
+  ai_tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS slack_user_map (
-  slack_user_id TEXT PRIMARY KEY,
-  github_user_id TEXT,
-  github_login TEXT,
-  created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL,
-  FOREIGN KEY(github_user_id) REFERENCES users(id)
-);
-
-CREATE TABLE IF NOT EXISTS sessions (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  token_hash TEXT NOT NULL UNIQUE,
-  user_id TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
-  FOREIGN KEY(user_id) REFERENCES users(id)
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  slack_user_id TEXT NOT NULL,
+  github_user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  PRIMARY KEY(project_id, slack_user_id)
 );
 
 CREATE TABLE IF NOT EXISTS oauth_states (
   state TEXT PRIMARY KEY,
   source TEXT,
   login_id TEXT,
-  created_at TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
-  used_at TEXT
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS vscode_login_attempts (
   id TEXT PRIMARY KEY,
-  session_token TEXT,
-  user_id TEXT,
-  created_at TEXT NOT NULL,
-  expires_at TEXT NOT NULL,
-  completed_at TEXT,
-  consumed_at TEXT,
-  FOREIGN KEY(user_id) REFERENCES users(id)
+  token TEXT,
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  completed_at TIMESTAMPTZ,
+  consumed_at TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS task_links (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  task_id TEXT NOT NULL,
+  id BIGSERIAL PRIMARY KEY,
+  task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   link_type TEXT NOT NULL,
   url TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  FOREIGN KEY(task_id) REFERENCES tasks(id)
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS task_comments (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  task_id TEXT NOT NULL,
+  id BIGSERIAL PRIMARY KEY,
+  task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   author_id TEXT,
   body TEXT NOT NULL,
-  created_at TEXT NOT NULL,
-  FOREIGN KEY(task_id) REFERENCES tasks(id)
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
-
-CREATE INDEX IF NOT EXISTS idx_tasks_assignee_order
-ON tasks (assignee_id, order_index, created_at);
-
-CREATE INDEX IF NOT EXISTS idx_tasks_assigned_user
-ON tasks (assigned_to_user_id, order_index, created_at);
-
-CREATE INDEX IF NOT EXISTS idx_tasks_status
-ON tasks (status, updated_at);
-
-CREATE INDEX IF NOT EXISTS idx_tasks_pending_slack_assignee
-ON tasks (pending_slack_assignee);
-
-CREATE INDEX IF NOT EXISTS idx_sessions_token_hash
-ON sessions (token_hash);
-
-CREATE INDEX IF NOT EXISTS idx_oauth_states_expires
-ON oauth_states (expires_at);
-
-CREATE INDEX IF NOT EXISTS idx_vscode_login_attempts_expires
-ON vscode_login_attempts (expires_at);

@@ -1,5 +1,5 @@
 const { v4: uuidv4 } = require('uuid');
-const { get, run } = require('./db');
+const { query } = require('./db');
 
 function mapUser(row) {
   if (!row) {
@@ -16,119 +16,153 @@ function mapUser(row) {
   };
 }
 
-function getUserById(id) {
-  return mapUser(get('SELECT * FROM users WHERE id = ?', id));
+async function getUserById(id) {
+  const result = await query('SELECT * FROM users WHERE id = $1 LIMIT 1', [id]);
+  return mapUser(result.rows[0]);
 }
 
-function getUserByLogin(login) {
-  return mapUser(get('SELECT * FROM users WHERE login = ?', String(login || '').toLowerCase()));
+async function getUserByLogin(login) {
+  const normalized = String(login || '').trim().toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+
+  const result = await query('SELECT * FROM users WHERE login = $1 LIMIT 1', [normalized]);
+  return mapUser(result.rows[0]);
 }
 
-function getUserByGithubId(githubId) {
-  return mapUser(get('SELECT * FROM users WHERE github_id = ?', String(githubId || '')));
+async function getUserByGithubId(githubId) {
+  const normalized = String(githubId || '').trim();
+  if (!normalized) {
+    return null;
+  }
+
+  const result = await query('SELECT * FROM users WHERE github_id = $1 LIMIT 1', [normalized]);
+  return mapUser(result.rows[0]);
 }
 
-function upsertGitHubUser(profile) {
-  const now = new Date().toISOString();
-  const githubId = String(profile.id || '');
+async function upsertGitHubUser(profile) {
+  const githubId = String(profile.id || '').trim();
   const login = String(profile.login || '').trim().toLowerCase();
 
   if (!githubId || !login) {
     throw new Error('Invalid GitHub profile payload.');
   }
 
-  const existingByGithubId = getUserByGithubId(githubId);
+  const existingByGithubId = await getUserByGithubId(githubId);
   if (existingByGithubId) {
-    run(
-      `UPDATE users SET login = ?, name = ?, avatar_url = ?, email = ?, updated_at = ? WHERE id = ?`,
-      login,
-      profile.name || null,
-      profile.avatar_url || null,
-      profile.email || null,
-      now,
-      existingByGithubId.userId
+    await query(
+      `UPDATE users
+       SET login = $1, name = $2, avatar_url = $3, email = $4, updated_at = NOW()
+       WHERE id = $5`,
+      [login, profile.name || null, profile.avatar_url || null, profile.email || null, existingByGithubId.userId]
     );
+
     return getUserById(existingByGithubId.userId);
   }
 
-  const existingByLogin = getUserByLogin(login);
+  const existingByLogin = await getUserByLogin(login);
   if (existingByLogin) {
-    run(
-      `UPDATE users SET github_id = ?, name = ?, avatar_url = ?, email = ?, updated_at = ? WHERE id = ?`,
-      githubId,
-      profile.name || null,
-      profile.avatar_url || null,
-      profile.email || null,
-      now,
-      existingByLogin.userId
+    await query(
+      `UPDATE users
+       SET github_id = $1, name = $2, avatar_url = $3, email = $4, updated_at = NOW()
+       WHERE id = $5`,
+      [githubId, profile.name || null, profile.avatar_url || null, profile.email || null, existingByLogin.userId]
     );
+
     return getUserById(existingByLogin.userId);
   }
 
   const id = uuidv4();
-  run(
+  await query(
     `INSERT INTO users (id, github_id, login, name, avatar_url, email, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-    id,
-    githubId,
-    login,
-    profile.name || null,
-    profile.avatar_url || null,
-    profile.email || null,
-    now,
-    now
+     VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())`,
+    [id, githubId, login, profile.name || null, profile.avatar_url || null, profile.email || null]
   );
 
   return getUserById(id);
 }
 
-function resolveMappedUserBySlackId(slackUserId) {
-  const key = String(slackUserId || '').trim();
-  if (!key) {
+async function createProject(name) {
+  const projectId = uuidv4();
+  await query(`INSERT INTO projects (id, name, created_at) VALUES ($1, $2, NOW())`, [projectId, String(name || '').trim() || 'Untitled']);
+  return { id: projectId, name: String(name || '').trim() || 'Untitled' };
+}
+
+async function addProjectMember(projectId, userId, role = 'member') {
+  await query(
+    `INSERT INTO project_members (project_id, user_id, role, created_at)
+     VALUES ($1, $2, $3, NOW())
+     ON CONFLICT(project_id, user_id)
+     DO UPDATE SET role = EXCLUDED.role`,
+    [projectId, userId, role]
+  );
+
+  return { projectId, userId, role };
+}
+
+async function isProjectMember(projectId, userId) {
+  const result = await query(
+    `SELECT 1 AS ok FROM project_members WHERE project_id = $1 AND user_id = $2 LIMIT 1`,
+    [projectId, userId]
+  );
+
+  return result.rowCount > 0;
+}
+
+async function resolveMappedUserBySlackId(projectId, slackUserId) {
+  const normalizedProjectId = String(projectId || '').trim();
+  const normalizedSlackId = String(slackUserId || '').trim();
+  if (!normalizedProjectId || !normalizedSlackId) {
     return null;
   }
 
-  const row = get(
+  const result = await query(
     `SELECT u.*
      FROM slack_user_map m
      JOIN users u ON u.id = m.github_user_id
-     WHERE m.slack_user_id = ?`,
-    key
+     WHERE m.project_id = $1 AND m.slack_user_id = $2
+     LIMIT 1`,
+    [normalizedProjectId, normalizedSlackId]
   );
 
-  return mapUser(row);
+  return mapUser(result.rows[0]);
 }
 
-function upsertSlackUserMap(slackUserId, user) {
-  const now = new Date().toISOString();
-  const key = String(slackUserId || '').trim();
-  if (!key) {
-    throw new Error('slackUserId is required.');
+async function upsertSlackUserMap(projectId, slackUserId, user) {
+  const normalizedProjectId = String(projectId || '').trim();
+  const normalizedSlackId = String(slackUserId || '').trim();
+  if (!normalizedProjectId || !normalizedSlackId) {
+    throw new Error('projectId and slackUserId are required.');
   }
 
-  if (!user?.userId || !user?.login) {
+  if (!user?.userId) {
     throw new Error('Valid GitHub user is required.');
   }
 
-  run(
-    `INSERT INTO slack_user_map (slack_user_id, github_user_id, github_login, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(slack_user_id)
-     DO UPDATE SET github_user_id = excluded.github_user_id, github_login = excluded.github_login, updated_at = excluded.updated_at`,
-    key,
-    user.userId,
-    user.login,
-    now,
-    now
+  await query(
+    `INSERT INTO slack_user_map (project_id, slack_user_id, github_user_id, created_at, updated_at)
+     VALUES ($1, $2, $3, NOW(), NOW())
+     ON CONFLICT(project_id, slack_user_id)
+     DO UPDATE SET github_user_id = EXCLUDED.github_user_id, updated_at = NOW()`,
+    [normalizedProjectId, normalizedSlackId, user.userId]
   );
 
-  return { slackUserId: key, githubUserId: user.userId, githubLogin: user.login };
+  return {
+    projectId: normalizedProjectId,
+    slackUserId: normalizedSlackId,
+    githubUserId: user.userId,
+    githubLogin: user.login
+  };
 }
 
 module.exports = {
-  getUserById,
+  addProjectMember,
+  createProject,
   getUserByGithubId,
+  getUserById,
   getUserByLogin,
+  isProjectMember,
   resolveMappedUserBySlackId,
   upsertGitHubUser,
   upsertSlackUserMap

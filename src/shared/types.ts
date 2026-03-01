@@ -19,7 +19,8 @@ export interface RelayUser {
 
 export interface Task {
   id: string;
-  assignee_id: string;
+  projectId?: string;
+  assignee_id: string | null;
   assignedToUserId?: string | null;
   pendingSlackAssignee?: string | null;
   createdByUserId?: string | null;
@@ -36,6 +37,7 @@ export interface Task {
   slackUserId?: string | null;
   slackChannelId?: string | null;
   slackThreadTs?: string | null;
+  slackWorkspaceId?: string | null;
   linkedFiles: string[];
   branchName?: string | null;
   prUrl?: string | null;

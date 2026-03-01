@@ -1,168 +1,177 @@
-# Relay (ContextHUD)
+# Relay / ContextHUD
 
-Local PM-to-developer workflow system with:
+ContextHUD is a Slack-to-IDE workflow extension with a hosted backend.
 
-- Slack ingestion (`POST /ingest/slack`, `POST /slack/nudge`)
-- SQLite system of record
-- VS Code sidebar + task detail panel
-- Git execution flow (`Start Task` -> branch, `Open PR` -> review)
-- Slack thread status reporting on status changes
-- GitHub OAuth sign-in for multi-user attribution + `My Tasks`
+This phase adds:
 
-## 1) Prerequisites
+- Hosted backend with Postgres
+- Multi-project scoping (`projectId`)
+- GitHub OAuth token auth for VS Code
+- Slack signature verification
+- Admin endpoints for project setup and Slack user mapping
+- Repo-local config via `.contexthud/config.json`
 
-- Node.js 20+ (you are on Node 25)
-- VS Code
-- A GitHub OAuth App
-- Optional: Slack app + slash command
+## Environment
 
-## 2) GitHub OAuth App Setup
+Create `.env`:
 
-In GitHub -> `Settings` -> `Developer settings` -> `OAuth Apps` -> `New OAuth App`:
-
-- `Application name`: `Relay Local`
-- `Homepage URL`: `http://localhost:8787`
-- `Authorization callback URL`: `http://localhost:8787/auth/github/callback`
-
-Copy:
-
-- Client ID
-- Client Secret
-
-## 3) Environment Setup
-
-`.env` is required. This repo already includes one; set values:
-
-```bash
+```env
 PORT=8787
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/contexthud
 APP_BASE_URL=http://localhost:8787
-SESSION_SECRET=use-a-long-random-string
-GITHUB_CLIENT_ID=your_client_id
-GITHUB_CLIENT_SECRET=your_client_secret
-SLACK_BOT_TOKEN=xoxb-...   # optional for Slack thread updates
-CONTEXTHUD_USER_HANDLE=     # optional legacy fallback filter
+GITHUB_CLIENT_ID=
+GITHUB_CLIENT_SECRET=
+SESSION_SECRET=
+SLACK_SIGNING_SECRET=
+SLACK_BOT_TOKEN=
+ADMIN_API_KEY=
 ```
 
-Notes:
-
-- `SESSION_SECRET` is required for auth endpoints.
-- Keep `APP_BASE_URL` exactly aligned with OAuth callback host/port.
-
-## 4) Run Locally
+## Backend Run
 
 ```bash
-cd /Users/mayankjain/Projects/extension_hub
+npm install
 npm run db:migrate
 npm run server:start
+```
+
+## Extension Run
+
+```bash
 npm run build
 ```
 
-Then in VS Code:
+In VS Code, press `F5` to open Extension Development Host.
 
-- Press `F5` (Run Extension)
-- In Extension Development Host, open ContextHUD view
+## Project Config (per repo)
 
-## 5) VS Code Settings
+In the extension host, run command:
 
-Workspace `.vscode/settings.json`:
+- `ContextHUD: Initialize Project Config`
+
+It creates `.contexthud/config.json`:
 
 ```json
 {
-  "contexthud.apiBaseUrl": "http://localhost:8787",
-  "contexthud.git.branchPrefix": "ch",
-  "contexthud.git.baseBranch": "main",
-  "contexthud.git.commitPollIntervalSec": 15,
-  "contexthud.user.handle": ""
+  "apiBaseUrl": "http://localhost:8787",
+  "projectId": "<project-id>",
+  "baseBranch": "main"
 }
 ```
 
-Notes:
+## Admin Setup (no dashboard)
 
-- With OAuth sign-in, filtering uses authenticated user + `assigned=me`.
-- `contexthud.user.handle` is only a non-auth fallback.
+All admin calls require `x-admin-api-key: <ADMIN_API_KEY>`.
 
-## 6) Backend API (Phase 3)
-
-### Auth
-
-- `POST /auth/vscode/start`
-  - Starts VS Code login attempt
-  - Returns `{ loginId, loginUrl }`
-- `GET /auth/github/login`
-- `GET /auth/github/callback`
-- `GET /me`
-  - With `Authorization: Bearer <token>` -> returns user
-  - During VS Code polling, extension sends `X-Vscode-Login-Id`
-- `POST /auth/logout`
-
-### Task + Mapping
-
-- `POST /ingest/slack`
-- `POST /slack/nudge`
-- `POST /admin/map/slack-user`
-  - body: `{ "slackUserId": "U...", "githubLogin": "mayank" }`
-- `GET /tasks?assigned=me|all`
-- `GET /tasks?assignee=<legacy_handle>`
-- `GET /tasks/:id`
-- `PATCH /tasks/:id`
-- `POST /tasks/:id/commits`
-
-## 7) Slack Assignment Mapping (Team Pilot)
-
-Slack mention ingestion stores Slack assignee identity. To bind Slack assignees to GitHub users:
-
-1. Sign in once from VS Code as each dev (creates `users` row).
-2. Map Slack user to GitHub user:
+### 1) Create project
 
 ```bash
-curl -X POST http://localhost:8787/admin/map/slack-user \
-  -H 'Content-Type: application/json' \
-  -d '{"slackUserId":"U0AHSSHHURG","githubLogin":"mayankjain"}'
+curl -X POST http://localhost:8787/admin/projects \
+  -H "x-admin-api-key: $ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Relay Pilot"}'
 ```
 
-3. New Slack-created tasks for that Slack user auto-assign to that GitHub user.
-4. Existing pending tasks for that Slack user are backfilled.
+### 2) Add member
 
-## 8) Manual Test Checklist
+```bash
+curl -X POST http://localhost:8787/admin/projects/<projectId>/members \
+  -H "x-admin-api-key: $ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"githubLogin":"your_github_login","role":"owner"}'
+```
 
-### A) OAuth + /me
+### 3) Map Slack user to GitHub user
 
-1. Start server (`npm run server:start`).
-2. In extension host, open ContextHUD.
-3. Click `Sign in with GitHub`.
-4. Browser opens GitHub consent page; complete login.
-5. Browser shows: `✅ Signed in to Relay`.
-6. Extension sidebar shows avatar/login and defaults to `My Tasks`.
+```bash
+curl -X POST http://localhost:8787/admin/projects/<projectId>/map/slack-user \
+  -H "x-admin-api-key: $ADMIN_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"slackUserId":"U123ABC","githubLogin":"your_github_login"}'
+```
 
-### B) Task filtering
+## Slack Ingest
 
-1. In sidebar, switch between `My Tasks` and `All Tasks`.
-2. Verify `My Tasks` only shows tasks assigned to your authenticated user.
+Project-scoped ingest endpoint:
 
-### C) Slack ingestion + mapping
+- `POST /ingest/slack/:projectId`
 
-1. Ensure Slack slash command points to your backend/ngrok route.
-2. Create task mentioning mapped Slack user.
-3. Verify task appears under that user’s `My Tasks`.
+Set this URL in Slack command/event config.
 
-### D) Attribution + lifecycle
+Slack signatures are required and verified using `SLACK_SIGNING_SECRET`.
 
-1. Open task detail.
-2. Click `Start Task` -> status `In Progress`.
-3. Click `Open PR` -> status `Review` + PR URL saved.
-4. Click `Done` -> status `Done`.
-5. Verify detail shows `Updated by <login> at <time>`.
+## Auth Flow (VS Code)
 
-### E) Slack reporting
+1. In sidebar, click `Sign in with GitHub`.
+2. Browser opens GitHub OAuth.
+3. After callback page says signed in, extension polls `/auth/github/token` and stores token in VS Code secrets.
+4. Extension calls project APIs with `Authorization: Bearer <token>`.
 
-1. Confirm task has Slack metadata (`slackChannelId` and optionally `slackThreadTs`).
-2. Change status in IDE.
-3. Verify backend posts update to Slack thread (if `SLACK_BOT_TOKEN` is set).
+## API (project scoped)
 
-## 9) Test Commands
+Authenticated + project membership required:
+
+- `GET /projects/:projectId/tasks?assigned=me|all`
+- `GET /projects/:projectId/tasks/:taskId`
+- `PATCH /projects/:projectId/tasks/:taskId`
+- `POST /projects/:projectId/tasks/:taskId/commits`
+
+## Health
+
+- `GET /health` returns DB connectivity status.
+
+## Troubleshooting
+
+### Slack says: `no such table: main.tasks_old`
+
+This error is from an old SQLite-era backend process/database. Current Phase 3.5 uses Postgres and should never reference `tasks_old`.
+
+Recovery steps:
+
+1. Stop all old backend processes on port `8787`.
+2. Ensure you are in this repo: `/Users/mayankjain/Projects/extension_hub`.
+3. Confirm `.env` has a valid `DATABASE_URL` for Postgres.
+4. Run:
 
 ```bash
 npm run db:migrate
-npm test
-npm run build
+npm run server:start
 ```
+
+5. Update Slack request URL to your current hosted endpoint:
+   - `/ingest/slack/:projectId`
+6. Re-test with:
+
+```bash
+curl http://localhost:8787/health
+```
+
+If Slack still returns `tasks_old`, your Slack app is still pointed at a stale server URL/process.
+
+## Diagnostics command
+
+Run:
+
+- `ContextHUD: Run Diagnostics`
+
+It prints:
+
+- loaded repo config
+- signed-in user
+- repo root + branch
+- backend health + response
+- last sync timestamp
+
+## Manual Pilot Test Checklist
+
+1. Start Postgres and backend (`db:migrate`, `server:start`).
+2. Create project via admin endpoint.
+3. Initialize `.contexthud/config.json` with that `projectId`.
+4. Sign in from extension.
+5. Add project member for your user.
+6. Verify `My Tasks` only shows assigned tasks.
+7. Configure Slack to call `/ingest/slack/:projectId`.
+8. Create task in Slack for mapped user.
+9. Verify task appears in extension.
+10. Change task status in IDE and verify Slack thread update.
+11. Verify non-member token gets `403` on project task endpoints.

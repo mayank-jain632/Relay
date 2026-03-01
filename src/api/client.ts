@@ -1,25 +1,60 @@
-import * as vscode from 'vscode';
 import { RelayUser, Task, TaskDetailResponse, TaskListResponse } from '../shared/types';
 import { GitCommit } from '../git/git';
 
-let authToken: string | undefined;
+export interface ApiContext {
+  apiBaseUrl: string;
+  projectId: string;
+}
 
-function getApiBaseUrl(): string {
-  const raw = vscode.workspace.getConfiguration('contexthud').get<string>('apiBaseUrl', 'http://localhost:8787');
+let authToken: string | undefined;
+let apiContext: ApiContext | undefined;
+
+function normalizeApiBaseUrl(raw: string): string {
   const trimmed = String(raw || '').trim();
   if (!trimmed) {
     return 'http://localhost:8787';
   }
+
   if (/^https?:\/\//i.test(trimmed)) {
     return trimmed.replace(/\/$/, '');
   }
+
   return `http://${trimmed}`.replace(/\/$/, '');
 }
 
+export function setApiContext(context: ApiContext): void {
+  apiContext = {
+    apiBaseUrl: normalizeApiBaseUrl(context.apiBaseUrl),
+    projectId: String(context.projectId || '').trim()
+  };
+}
+
+export function clearApiContext(): void {
+  apiContext = undefined;
+}
+
+export function getApiContext(): ApiContext | undefined {
+  return apiContext;
+}
+
+function requireApiContext(): ApiContext {
+  if (!apiContext?.projectId) {
+    throw new Error('ContextHUD project config is missing. Initialize .contexthud/config.json.');
+  }
+
+  return apiContext;
+}
+
 function buildApiUrl(pathname: string): string {
-  const base = getApiBaseUrl();
+  const context = requireApiContext();
   const normalizedPath = pathname.startsWith('/') ? pathname : `/${pathname}`;
-  return `${base}${normalizedPath}`;
+  return `${context.apiBaseUrl}${normalizedPath}`;
+}
+
+function buildAuthUrl(pathname: string): string {
+  const base = apiContext?.apiBaseUrl || 'http://localhost:8787';
+  const normalizedPath = pathname.startsWith('/') ? pathname : `/${pathname}`;
+  return `${normalizeApiBaseUrl(base)}${normalizedPath}`;
 }
 
 interface RequestOptions {
@@ -48,6 +83,26 @@ async function apiFetch(pathname: string, options: RequestOptions = {}): Promise
   });
 }
 
+async function authFetch(pathname: string, options: RequestOptions = {}): Promise<Response> {
+  const headers: Record<string, string> = {
+    ...(options.headers || {})
+  };
+
+  if (authToken) {
+    headers.Authorization = `Bearer ${authToken}`;
+  }
+
+  if (options.body !== undefined && !headers['Content-Type']) {
+    headers['Content-Type'] = 'application/json';
+  }
+
+  return fetch(buildAuthUrl(pathname), {
+    method: options.method || 'GET',
+    headers,
+    body: options.body === undefined ? undefined : JSON.stringify(options.body)
+  });
+}
+
 export function setAuthToken(token: string | undefined): void {
   authToken = token || undefined;
 }
@@ -57,7 +112,7 @@ export function getAuthToken(): string | undefined {
 }
 
 export async function startVscodeLogin(): Promise<{ loginId: string; loginUrl: string }> {
-  const response = await apiFetch('/auth/vscode/start', { method: 'POST' });
+  const response = await authFetch('/auth/vscode/start', { method: 'POST' });
   if (!response.ok) {
     const detail = await response.text();
     throw new Error(`Login start failed: ${response.status}${detail ? ` - ${detail}` : ''}`);
@@ -66,13 +121,17 @@ export async function startVscodeLogin(): Promise<{ loginId: string; loginUrl: s
   return (await response.json()) as { loginId: string; loginUrl: string };
 }
 
-export async function fetchMe(loginId?: string): Promise<RelayUser> {
-  const headers: Record<string, string> = {};
-  if (loginId) {
-    headers['X-Vscode-Login-Id'] = loginId;
+export async function pollVscodeToken(loginId: string): Promise<{ token: string; user: RelayUser }> {
+  const response = await authFetch(`/auth/github/token?loginId=${encodeURIComponent(loginId)}`);
+  if (!response.ok) {
+    throw new Error(`Token poll failed: ${response.status}`);
   }
 
-  const response = await apiFetch('/me', { headers });
+  return (await response.json()) as { token: string; user: RelayUser };
+}
+
+export async function fetchMe(): Promise<RelayUser> {
+  const response = await authFetch('/me');
   if (!response.ok) {
     throw new Error(`Me fetch failed: ${response.status}`);
   }
@@ -80,20 +139,14 @@ export async function fetchMe(loginId?: string): Promise<RelayUser> {
   return (await response.json()) as RelayUser;
 }
 
-export async function logout(): Promise<void> {
-  await apiFetch('/auth/logout', { method: 'POST' });
-}
-
-export async function fetchTaskList(params: { assignee?: string; assigned?: 'me' | 'all' } = {}): Promise<TaskListResponse> {
+export async function fetchTaskList(params: { assigned?: 'me' | 'all' } = {}): Promise<TaskListResponse> {
+  const context = requireApiContext();
   const query = new URLSearchParams();
-  if (params.assignee) {
-    query.set('assignee', params.assignee);
-  }
   if (params.assigned) {
     query.set('assigned', params.assigned);
   }
 
-  const pathname = query.toString() ? `/tasks?${query.toString()}` : '/tasks';
+  const pathname = `/projects/${encodeURIComponent(context.projectId)}/tasks${query.toString() ? `?${query.toString()}` : ''}`;
   const response = await apiFetch(pathname);
 
   if (!response.ok) {
@@ -104,16 +157,19 @@ export async function fetchTaskList(params: { assignee?: string; assigned?: 'me'
 }
 
 export async function getTaskById(taskId: string): Promise<Task> {
-  const response = await apiFetch(`/tasks/${encodeURIComponent(taskId)}`);
+  const context = requireApiContext();
+  const response = await apiFetch(`/projects/${encodeURIComponent(context.projectId)}/tasks/${encodeURIComponent(taskId)}`);
   if (!response.ok) {
     throw new Error(`Task detail fetch failed: ${response.status}`);
   }
+
   const data = (await response.json()) as TaskDetailResponse;
   return data.task;
 }
 
 export async function patchTask(taskId: string, patch: Record<string, unknown>): Promise<Task> {
-  const response = await apiFetch(`/tasks/${encodeURIComponent(taskId)}`, {
+  const context = requireApiContext();
+  const response = await apiFetch(`/projects/${encodeURIComponent(context.projectId)}/tasks/${encodeURIComponent(taskId)}`, {
     method: 'PATCH',
     body: patch
   });
@@ -128,7 +184,8 @@ export async function patchTask(taskId: string, patch: Record<string, unknown>):
 }
 
 export async function addTaskCommit(taskId: string, commit: GitCommit): Promise<Task> {
-  const response = await apiFetch(`/tasks/${encodeURIComponent(taskId)}/commits`, {
+  const context = requireApiContext();
+  const response = await apiFetch(`/projects/${encodeURIComponent(context.projectId)}/tasks/${encodeURIComponent(taskId)}/commits`, {
     method: 'POST',
     body: commit
   });
