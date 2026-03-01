@@ -1,4 +1,4 @@
-# Relay (P1.2)
+# Relay
 
 Local PM-to-developer workflow system with:
 
