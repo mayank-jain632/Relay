@@ -1,142 +1,71 @@
-# ContextHUD
+# ContextHUD (Phase 0)
 
-ContextHUD is a PM-to-Developer workflow tool that syncs a prioritized Slack task queue into a VS Code sidebar.
+Local PM-to-developer workflow system with:
+- Slack ingestion (`POST /ingest/slack`)
+- SQLite as system of record
+- VS Code sidebar list + task detail editor webview
 
-## Backend (Local PostgreSQL)
-
-This repo now uses PostgreSQL (not JSON files) for task persistence.
-
-### Database schema
-
-Defined in `server/sql/init.sql`:
-
-- `id UUID PRIMARY KEY`
-- `assignee_id TEXT`
-- `file_path TEXT`
-- `description TEXT`
-- `order_index INTEGER`
-- `status ENUM-like check ('pending' | 'completed')`
-- `created_at TIMESTAMPTZ`
-- `pm_slack_id TEXT`
-- `completed_at TIMESTAMPTZ`
-
-## Key Files
-
-- `server/server.js`: Express + Slack + Socket.io API
-- `server/lib/db.js`: PostgreSQL pool/connection
-- `server/lib/task-repo.js`: SQL repository methods
-- `server/sql/init.sql`: migration SQL
-- `server/scripts/migrate.js`: migration runner
-- `src/extension.ts`: VS Code lifecycle + file trigger + done callback
-- `src/SidebarProvider.ts`: sidebar HUD UI
-
-## Local Setup (Demo)
-
-1. Install dependencies:
+## Run
 
 ```bash
-npm install
-```
-
-2. Start PostgreSQL locally with Docker:
-
-```bash
-npm run db:up
-```
-
-3. Create your env file:
-
-```bash
-cp .env.example .env
-```
-
-4. Load env vars in your shell:
-
-```bash
-export $(cat .env | xargs)
-```
-
-5. Run DB migration:
-
-```bash
+cd /Users/mayankjain/Projects/extension_hub
 npm run db:migrate
-```
-
-6. Start backend:
-
-```bash
 npm run server:start
-```
-
-7. Build extension:
-
-```bash
 npm run build
 ```
 
-8. Start extension host in VS Code:
-- Press `F5`
+Then in VS Code run `Run Extension` (F5) and open ContextHUD.
 
-## User Mapping
+## Backend API (v0)
 
-Create `.contexthud/users.json`:
+- `POST /ingest/slack`
+  - Ingests Slack task text (e.g. `@mayank [task] Fix login redirect #priority:high file:src/auth.ts`)
+  - Creates task in SQLite
+- `GET /tasks?assignee=me`
+  - Uses `x-current-user` header for `me`
+- `GET /tasks/:id`
+  - Returns detailed task
+- `PATCH /tasks/:id`
+  - Updates status/title/description/linked files/branch
+- `POST /tasks/:id/ai/summarize`
+  - Stores AI-style structured fields (`ai_title`, `ai_summary`, `ai_acceptance_criteria`, `ai_open_questions`, `ai_tags`)
 
-```json
-{
-  "U0123ABCDEF": "mayankjain"
-}
+Compatibility:
+- `POST /slack/nudge` still supported and routed to ingest behavior.
+
+## Storage
+
+SQLite file path:
+- `server/data/contexthud.db`
+
+Schema file:
+- `server/sql/init.sql`
+
+Tables:
+- `tasks`
+- `task_links`
+- `task_comments`
+
+## VS Code UX (v0)
+
+- Sidebar: list only (title, status pill, timestamp/source)
+- Click task: opens `Task Detail` editor-tab webview
+- Task Detail actions:
+  - Start Task
+  - Mark status (Todo / In Progress / Blocked / Done)
+  - Open Slack Thread
+  - Ask AI (summarize)
+  - Save patch (title/description/linked files/branch)
+
+## Slack Text Conventions
+
+Examples:
+- `@mayank [task] Fix login redirect on mobile safari — callback state mismatch`
+- `@mayank [task] Add retry logic #priority:high #due:2026-03-10 file:src/api/client.ts`
+
+## Tests
+
+```bash
+npm run test:server
+npm run build
 ```
-
-- Key: Slack user ID (`U...`)
-- Value: local/GitHub username (must match `contexthud.currentUser`)
-
-## VS Code Settings
-
-Put in `.vscode/settings.json`:
-
-```json
-{
-  "contexthud.currentUser": "mayankjain",
-  "contexthud.userMappingPath": ".contexthud/users.json",
-  "contexthud.apiBaseUrl": "http://localhost:8787",
-  "contexthud.socketUrl": "http://localhost:8787"
-}
-```
-
-## Slack Command Contract
-
-- Route: `POST /slack/nudge`
-- Text format: `@user [file_path] [requirement]`
-- Example: `/nudge @mayank src/extension.ts implement private filter`
-
-Server flow:
-1. Parse Slack command text.
-2. Resolve Slack ID to local assignee via `.contexthud/users.json`.
-3. Compute next `order_index` for that assignee.
-4. Insert task in Postgres.
-5. Emit `tasksUpdated` websocket event.
-
-## Completion Flow
-
-When user clicks `Done` in sidebar:
-1. Webview posts message to extension.
-2. Extension calls `POST /tasks/complete`.
-3. Backend updates task row to `completed`.
-4. Backend emits `tasksUpdated` for real-time refresh.
-5. Backend DMs PM via Slack bot if `SLACK_BOT_TOKEN` is set.
-
-## Scripts
-
-- `npm run test:server`: server unit tests
-- `npm run db:up`: start local Postgres
-- `npm run db:down`: stop local Postgres
-- `npm run db:migrate`: apply schema
-- `npm run server:start`: run backend
-- `npm run build`: compile extension
-- `npm test`: server tests + extension build
-
-## Notes
-
-- Slack slash commands require a public HTTPS URL, not localhost directly.
-- For local demo, use a tunnel (ngrok/cloudflared) to expose `http://localhost:8787`.
-- Add Slack signature verification before production.

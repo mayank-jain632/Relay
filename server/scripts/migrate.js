@@ -1,20 +1,9 @@
-const fs = require('fs');
-const path = require('path');
-const { query, closePool } = require('../lib/db');
+const { initSchema } = require('../lib/db');
 
-async function run() {
-  const sqlPath = path.join(__dirname, '..', 'sql', 'init.sql');
-  const sql = fs.readFileSync(sqlPath, 'utf8');
-
-  await query(sql);
+try {
+  initSchema();
   console.log('Migration applied: server/sql/init.sql');
+} catch (error) {
+  console.error('Migration failed:', error);
+  process.exitCode = 1;
 }
-
-run()
-  .catch((error) => {
-    console.error('Migration failed:', error);
-    process.exitCode = 1;
-  })
-  .finally(async () => {
-    await closePool().catch(() => {});
-  });

@@ -1,90 +1,202 @@
-function runQuery(text, params = []) {
-  const { query } = require('./db');
-  return query(text, params);
+const { v4: uuidv4 } = require('uuid');
+const { all, get, run } = require('./db');
+
+function safeJsonParse(text, fallback) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return fallback;
+  }
 }
 
-function mapRowToTask(row) {
-  return {
-    id: row.id,
-    assignee_id: row.assignee_id,
-    filePath: row.file_path,
-    description: row.description,
-    orderIndex: row.order_index,
-    status: row.status,
-    timestamp: row.created_at,
-    pmSlackId: row.pm_slack_id || '',
-    completedAt: row.completed_at || null
-  };
-}
-
-function computeNextOrderIndexFromRows(rows) {
-  const maxIndex = rows.reduce((max, row) => Math.max(max, Number(row.order_index || 0)), 0);
-  return maxIndex + 1;
-}
-
-async function listTasks() {
-  const result = await runQuery(
-    `SELECT id, assignee_id, file_path, description, order_index, status, created_at, pm_slack_id, completed_at
-     FROM tasks
-     ORDER BY assignee_id ASC, order_index ASC, created_at ASC`
-  );
-
-  return result.rows.map(mapRowToTask);
-}
-
-async function nextOrderIndex(assigneeId) {
-  const result = await runQuery(
-    `SELECT order_index
-     FROM tasks
-     WHERE assignee_id = $1 AND status = 'pending'`,
-    [assigneeId]
-  );
-
-  return computeNextOrderIndexFromRows(result.rows);
-}
-
-async function insertTask(task) {
-  const result = await runQuery(
-    `INSERT INTO tasks (
-      id, assignee_id, file_path, description, order_index, status, created_at, pm_slack_id
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-    RETURNING id, assignee_id, file_path, description, order_index, status, created_at, pm_slack_id, completed_at`,
-    [
-      task.id,
-      task.assignee_id,
-      task.filePath,
-      task.description,
-      task.orderIndex,
-      task.status,
-      task.timestamp,
-      task.pmSlackId || null
-    ]
-  );
-
-  return mapRowToTask(result.rows[0]);
-}
-
-async function completeTask(taskId) {
-  const result = await runQuery(
-    `UPDATE tasks
-     SET status = 'completed', completed_at = NOW()
-     WHERE id = $1 AND status <> 'completed'
-     RETURNING id, assignee_id, file_path, description, order_index, status, created_at, pm_slack_id, completed_at`,
-    [taskId]
-  );
-
-  if (!result.rows.length) {
+function mapTask(row) {
+  if (!row) {
     return null;
   }
 
-  return mapRowToTask(result.rows[0]);
+  return {
+    id: row.id,
+    assignee_id: row.assignee_id,
+    title: row.title,
+    description: row.description,
+    status: row.status,
+    priority: row.priority,
+    dueDate: row.due_date,
+    orderIndex: row.order_index,
+    source: row.source,
+    sourceUrl: row.source_url,
+    linkedFiles: safeJsonParse(row.linked_files, []),
+    branchName: row.branch_name,
+    ai_title: row.ai_title,
+    ai_summary: row.ai_summary,
+    ai_acceptance_criteria: safeJsonParse(row.ai_acceptance_criteria, []),
+    ai_open_questions: safeJsonParse(row.ai_open_questions, []),
+    ai_tags: safeJsonParse(row.ai_tags, []),
+    timestamp: row.created_at,
+    updatedAt: row.updated_at
+  };
+}
+
+function listTasks(assignee) {
+  let rows;
+  if (assignee) {
+    rows = all(
+      `SELECT * FROM tasks WHERE assignee_id = ? ORDER BY order_index ASC, created_at DESC`,
+      assignee
+    );
+  } else {
+    rows = all(`SELECT * FROM tasks ORDER BY assignee_id ASC, order_index ASC, created_at DESC`);
+  }
+
+  return rows.map(mapTask);
+}
+
+function getTaskById(id) {
+  return mapTask(get(`SELECT * FROM tasks WHERE id = ?`, id));
+}
+
+function nextOrderIndex(assigneeId) {
+  const row = get(
+    `SELECT COALESCE(MAX(order_index), 0) AS max_order FROM tasks WHERE assignee_id = ? AND status != 'done'`,
+    assigneeId
+  );
+  return Number(row?.max_order || 0) + 1;
+}
+
+function createTask(input) {
+  const now = new Date().toISOString();
+  const id = input.id || uuidv4();
+
+  run(
+    `INSERT INTO tasks (
+      id, assignee_id, title, description, status, priority, due_date, order_index, source, source_url,
+      slack_user_id, slack_channel_id, slack_thread_ts, linked_files, branch_name,
+      ai_title, ai_summary, ai_acceptance_criteria, ai_open_questions, ai_tags,
+      created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    id,
+    input.assignee_id,
+    input.title,
+    input.description,
+    input.status || 'todo',
+    input.priority || null,
+    input.dueDate || null,
+    input.orderIndex,
+    input.source || 'slack',
+    input.sourceUrl || null,
+    input.slackUserId || null,
+    input.slackChannelId || null,
+    input.slackThreadTs || null,
+    JSON.stringify(input.linkedFiles || []),
+    input.branchName || null,
+    input.ai_title || null,
+    input.ai_summary || null,
+    JSON.stringify(input.ai_acceptance_criteria || []),
+    JSON.stringify(input.ai_open_questions || []),
+    JSON.stringify(input.ai_tags || []),
+    now,
+    now
+  );
+
+  if (input.sourceUrl) {
+    run(
+      `INSERT INTO task_links (task_id, link_type, url, created_at) VALUES (?, ?, ?, ?)`,
+      id,
+      'slack_thread',
+      input.sourceUrl,
+      now
+    );
+  }
+
+  return getTaskById(id);
+}
+
+function patchTask(id, patch) {
+  const existing = getTaskById(id);
+  if (!existing) {
+    return null;
+  }
+
+  const next = {
+    ...existing,
+    ...patch,
+    linkedFiles: patch.linkedFiles ?? existing.linkedFiles,
+    ai_acceptance_criteria: patch.ai_acceptance_criteria ?? existing.ai_acceptance_criteria,
+    ai_open_questions: patch.ai_open_questions ?? existing.ai_open_questions,
+    ai_tags: patch.ai_tags ?? existing.ai_tags
+  };
+
+  run(
+    `UPDATE tasks
+     SET title = ?, description = ?, status = ?, priority = ?, due_date = ?, linked_files = ?, branch_name = ?,
+         ai_title = ?, ai_summary = ?, ai_acceptance_criteria = ?, ai_open_questions = ?, ai_tags = ?, updated_at = ?
+     WHERE id = ?`,
+    next.title,
+    next.description,
+    next.status,
+    next.priority || null,
+    next.dueDate || null,
+    JSON.stringify(next.linkedFiles || []),
+    next.branchName || null,
+    next.ai_title || null,
+    next.ai_summary || null,
+    JSON.stringify(next.ai_acceptance_criteria || []),
+    JSON.stringify(next.ai_open_questions || []),
+    JSON.stringify(next.ai_tags || []),
+    new Date().toISOString(),
+    id
+  );
+
+  return getTaskById(id);
+}
+
+function localAiSummarize(task) {
+  const sentences = String(task.description || '')
+    .split(/(?<=[.!?])\s+/)
+    .filter(Boolean);
+
+  const summary = sentences.slice(0, 2).join(' ') || task.description;
+  const acceptance = [
+    `Implement ${task.title} successfully`,
+    'Add or update tests for the changed behavior',
+    'Verify no regressions in related workflow'
+  ];
+
+  const openQuestions = [];
+  if (!task.dueDate) {
+    openQuestions.push('What is the expected due date?');
+  }
+  if (!task.linkedFiles?.length) {
+    openQuestions.push('Which files should be changed first?');
+  }
+
+  const tags = [task.priority || 'normal', task.status, 'slack-ingested'];
+
+  return {
+    ai_acceptance_criteria: acceptance,
+    ai_open_questions: openQuestions,
+    ai_summary: summary,
+    ai_tags: tags,
+    ai_title: task.title
+  };
+}
+
+function summarizeTask(id) {
+  const existing = getTaskById(id);
+  if (!existing) {
+    return null;
+  }
+
+  const ai = localAiSummarize(existing);
+  return patchTask(id, ai);
 }
 
 module.exports = {
-  completeTask,
-  computeNextOrderIndexFromRows,
-  insertTask,
+  createTask,
+  getTaskById,
   listTasks,
-  mapRowToTask,
-  nextOrderIndex
+  localAiSummarize,
+  nextOrderIndex,
+  patchTask,
+  summarizeTask
 };

@@ -1,25 +1,30 @@
 import * as vscode from 'vscode';
 import { SidebarProvider } from './SidebarProvider';
-import { Task, TaskListResponse } from './shared/types';
+import { Task, TaskDetailResponse, TaskListResponse } from './shared/types';
 import { getCurrentUser } from './shared/userMap';
-import { getWorkspaceRelativePath, prioritizeByFile, privateFilter, sortByOrder } from './shared/taskUtils';
+import { getWorkspaceRelativePath, normalizeFilePath, prioritizeByFile, sortByOrder } from './shared/taskUtils';
+import { TaskDetailPanel } from './TaskDetailPanel';
 
 let currentTasks: Task[] = [];
 let pollHandle: NodeJS.Timeout | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
-  const sidebar = new SidebarProvider(context.extensionUri);
-  context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(SidebarProvider.viewType, sidebar)
-  );
+  const sidebar = new SidebarProvider();
+  context.subscriptions.push(vscode.window.registerWebviewViewProvider(SidebarProvider.viewType, sidebar));
 
-  sidebar.setOnDoneTask(async (taskId: string) => {
-    try {
-      await markTaskDone(taskId);
-      await refreshTasks(sidebar);
-    } catch (error) {
-      vscode.window.showErrorMessage(`ContextHUD failed to mark task complete: ${String(error)}`);
-    }
+  sidebar.setOnOpenTask((taskId) => {
+    TaskDetailPanel.open(
+      context,
+      taskId,
+      {
+        getTaskById,
+        patchTask,
+        summarizeTask
+      },
+      async () => {
+        await refreshTasks(sidebar);
+      }
+    );
   });
 
   context.subscriptions.push(
@@ -36,9 +41,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
       const relativePath = getWorkspaceRelativePath(editor.document.uri);
       const reprioritized = prioritizeByFile(currentTasks, relativePath);
-      const movedToTop = reprioritized[0]?.filePath?.toLowerCase() === relativePath.toLowerCase();
+      const topTaskHasMatchingFile = (reprioritized[0]?.linkedFiles || []).some(
+        (file) => normalizeFilePath(file) === normalizeFilePath(relativePath)
+      );
 
-      if (movedToTop) {
+      if (topTaskHasMatchingFile) {
         currentTasks = reprioritized;
         sidebar.updateTasks(currentTasks);
         applySubtleGlow(editor);
@@ -47,58 +54,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   await refreshTasks(sidebar);
-  connectRealtime(sidebar, context);
-}
 
-export function deactivate(): void {
-  if (pollHandle) {
-    clearInterval(pollHandle);
-  }
-}
-
-async function refreshTasks(sidebar: SidebarProvider): Promise<void> {
-  const currentUser = await getCurrentUser();
-  const apiBaseUrl = vscode.workspace.getConfiguration('contexthud').get<string>('apiBaseUrl', 'http://localhost:8787');
-
-  if (!currentUser) {
-    currentTasks = [];
-    sidebar.updateTasks([]);
-    return;
-  }
-
-  try {
-    const response = await fetch(`${apiBaseUrl}/tasks`);
-    if (!response.ok) {
-      throw new Error(`Task fetch failed: ${response.status}`);
-    }
-
-    const data = (await response.json()) as TaskListResponse;
-    const pendingOnly = data.tasks.filter((task) => task.status === 'pending');
-    currentTasks = sortByOrder(privateFilter(pendingOnly, currentUser));
-    sidebar.updateTasks(currentTasks);
-  } catch (error) {
-    vscode.window.showErrorMessage(`ContextHUD failed to fetch tasks: ${String(error)}`);
-  }
-}
-
-async function markTaskDone(taskId: string): Promise<void> {
-  const apiBaseUrl = vscode.workspace.getConfiguration('contexthud').get<string>('apiBaseUrl', 'http://localhost:8787');
-
-  const response = await fetch(`${apiBaseUrl}/tasks/complete`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({ taskId })
-  });
-
-  if (!response.ok) {
-    throw new Error(`Task complete failed: ${response.status}`);
-  }
-}
-
-function connectRealtime(sidebar: SidebarProvider, context: vscode.ExtensionContext): void {
-  // Polling-only mode for extension host stability on Node runtime changes.
   pollHandle = setInterval(() => {
     void refreshTasks(sidebar);
   }, 5000);
@@ -110,6 +66,109 @@ function connectRealtime(sidebar: SidebarProvider, context: vscode.ExtensionCont
       }
     }
   });
+}
+
+export function deactivate(): void {
+  if (pollHandle) {
+    clearInterval(pollHandle);
+  }
+}
+
+async function refreshTasks(sidebar: SidebarProvider): Promise<void> {
+  const configuredUser = await getCurrentUser();
+
+  try {
+    const data = await fetchTaskList();
+    const active = data.tasks.filter((task) => task.status !== 'done');
+
+    const privateFiltered = configuredUser
+      ? active.filter((task) => sameIdentity(task.assignee_id, configuredUser))
+      : active;
+
+    currentTasks = sortByOrder(privateFiltered);
+    sidebar.updateTasks(currentTasks);
+  } catch (error) {
+    vscode.window.showErrorMessage(`ContextHUD failed to fetch tasks: ${String(error)}`);
+  }
+}
+
+function normalizeIdentity(value: string): string {
+  return String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '');
+}
+
+function sameIdentity(a: string, b: string): boolean {
+  return normalizeIdentity(a) === normalizeIdentity(b);
+}
+
+async function fetchTaskList(): Promise<TaskListResponse> {
+  const url = buildApiUrl('/tasks');
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(`Task fetch failed: ${response.status}`);
+  }
+
+  return (await response.json()) as TaskListResponse;
+}
+
+async function getTaskById(taskId: string): Promise<Task> {
+  const response = await fetch(buildApiUrl(`/tasks/${encodeURIComponent(taskId)}`));
+  if (!response.ok) {
+    throw new Error(`Task detail fetch failed: ${response.status}`);
+  }
+
+  const data = (await response.json()) as TaskDetailResponse;
+  return data.task;
+}
+
+async function patchTask(taskId: string, patch: Record<string, unknown>): Promise<Task> {
+  const response = await fetch(buildApiUrl(`/tasks/${encodeURIComponent(taskId)}`), {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch)
+  });
+
+  if (!response.ok) {
+    throw new Error(`Task patch failed: ${response.status}`);
+  }
+
+  const data = (await response.json()) as TaskDetailResponse;
+  return data.task;
+}
+
+async function summarizeTask(taskId: string): Promise<Task> {
+  const response = await fetch(buildApiUrl(`/tasks/${encodeURIComponent(taskId)}/ai/summarize`), {
+    method: 'POST'
+  });
+
+  if (!response.ok) {
+    throw new Error(`AI summarize failed: ${response.status}`);
+  }
+
+  const data = (await response.json()) as TaskDetailResponse;
+  return data.task;
+}
+
+function getApiBaseUrl(): string {
+  const raw = vscode.workspace.getConfiguration('contexthud').get<string>('apiBaseUrl', 'http://localhost:8787');
+  const trimmed = String(raw || '').trim();
+  if (!trimmed) {
+    return 'http://localhost:8787';
+  }
+
+  if (/^https?:\/\//i.test(trimmed)) {
+    return trimmed.replace(/\/$/, '');
+  }
+
+  return `http://${trimmed}`.replace(/\/$/, '');
+}
+
+function buildApiUrl(pathname: string): string {
+  const base = getApiBaseUrl();
+  const normalizedPath = pathname.startsWith('/') ? pathname : `/${pathname}`;
+  return `${base}${normalizedPath}`;
 }
 
 function applySubtleGlow(editor: vscode.TextEditor): void {

@@ -1,13 +1,25 @@
-export type TaskStatus = 'pending' | 'completed';
+export type TaskStatus = 'todo' | 'in_progress' | 'blocked' | 'done';
 
 export interface Task {
   id: string;
   assignee_id: string;
-  filePath: string;
+  title: string;
   description: string;
-  orderIndex: number;
   status: TaskStatus;
+  priority?: string;
+  dueDate?: string | null;
+  orderIndex: number;
+  source?: string;
+  sourceUrl?: string | null;
+  linkedFiles: string[];
+  branchName?: string | null;
+  ai_title?: string | null;
+  ai_summary?: string | null;
+  ai_acceptance_criteria?: string[];
+  ai_open_questions?: string[];
+  ai_tags?: string[];
   timestamp: string;
+  updatedAt?: string;
 }
 
 export interface UserMapping {
@@ -16,4 +28,8 @@ export interface UserMapping {
 
 export interface TaskListResponse {
   tasks: Task[];
+}
+
+export interface TaskDetailResponse {
+  task: Task;
 }

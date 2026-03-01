@@ -53,12 +53,7 @@
         "contexthud.apiBaseUrl": {
           "type": "string",
           "default": "http://localhost:8787",
-          "description": "Backend API base URL for task reads/completions."
-        },
-        "contexthud.socketUrl": {
-          "type": "string",
-          "default": "http://localhost:8787",
-          "description": "Socket endpoint for real-time updates."
+          "description": "Backend API base URL."
         }
       }
     }
@@ -68,19 +63,11 @@
     "watch": "tsc -w -p .",
     "test": "npm run test:server && npm run build",
     "test:server": "node --test server/test/*.test.js",
-    "db:up": "docker compose up -d postgres",
-    "db:down": "docker compose down",
     "db:migrate": "node server/scripts/migrate.js",
     "server:start": "node server/server.js"
   },
   "dependencies": {
-    "@slack/web-api": "^7.8.0",
-    "docker": "^1.0.0",
     "express": "^4.21.2",
-    "pg": "^8.18.0",
-    "postgres": "^3.4.8",
-    "socket.io": "^4.8.1",
-    "socket.io-client": "^4.8.1",
     "uuid": "^11.1.0"
   },
   "devDependencies": {

@@ -25,7 +25,10 @@ export function getWorkspaceRelativePath(uri: vscode.Uri): string {
 
 export function prioritizeByFile(tasks: Task[], activeRelativePath: string): Task[] {
   const normalized = normalizeFilePath(activeRelativePath);
-  const idx = tasks.findIndex((task) => normalizeFilePath(task.filePath) === normalized);
+  const idx = tasks.findIndex((task) =>
+    (task.linkedFiles || []).some((file) => normalizeFilePath(file) === normalized)
+  );
+
   if (idx <= 0) {
     return tasks;
   }
