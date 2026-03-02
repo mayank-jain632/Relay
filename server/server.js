@@ -74,6 +74,20 @@ function getBearerToken(req) {
   return authHeader.slice('Bearer '.length).trim();
 }
 
+
+function normalizeSecret(value) {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return '';
+  }
+
+  if ((raw.startsWith('"') && raw.endsWith('"')) || (raw.startsWith("'") && raw.endsWith("'"))) {
+    return raw.slice(1, -1).trim();
+  }
+
+  return raw;
+}
+
 function requireEnv(name) {
   const value = String(process.env[name] || '').trim();
   if (!value) {
@@ -429,11 +443,24 @@ function createApp() {
   }
 
   function requireAdmin(req, res, next) {
-    const expected = String(process.env.ADMIN_API_KEY || '').trim();
-    const actual = String(req.headers['x-admin-api-key'] || '').trim();
-    if (!expected || !actual || expected !== actual) {
-      return res.status(401).json({ error: 'Invalid admin key' });
+    const expected = normalizeSecret(process.env.ADMIN_API_KEY);
+    const headerKey = normalizeSecret(req.headers['x-admin-api-key']);
+    const bearerKey = normalizeSecret(getBearerToken(req));
+    const queryKey = normalizeSecret(req.query?.adminKey);
+    const actual = headerKey || bearerKey || queryKey;
+
+    if (!expected) {
+      return res.status(401).json({ error: 'Invalid admin key', reason: 'server_missing' });
     }
+
+    if (!actual) {
+      return res.status(401).json({ error: 'Invalid admin key', reason: 'request_missing' });
+    }
+
+    if (expected !== actual) {
+      return res.status(401).json({ error: 'Invalid admin key', reason: 'mismatch' });
+    }
+
     return next();
   }
 
