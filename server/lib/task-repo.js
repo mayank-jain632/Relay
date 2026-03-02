@@ -298,7 +298,7 @@ async function backfillSlackAssigneeMapping(projectId, slackUserId, user) {
          pending_slack_assignee = NULL,
          updated_by_user_id = $1,
          updated_at = NOW()
-     WHERE project_id = $3 AND (pending_slack_assignee = $4 OR slack_user_id = $4)`,
+     WHERE project_id = $3 AND (LOWER(COALESCE(pending_slack_assignee,'')) = LOWER($4) OR LOWER(COALESCE(slack_user_id,'')) = LOWER($4))`,
     [user.userId, user.login, projectId, slackUserId]
   );
 }

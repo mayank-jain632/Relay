@@ -1,6 +1,26 @@
 const { v4: uuidv4 } = require('uuid');
 const { query } = require('./db');
 
+
+function normalizeSlackIdentifier(value) {
+  const raw = String(value || '').trim();
+  if (!raw) {
+    return '';
+  }
+
+  const mention = raw.match(/^<@([A-Z0-9]+)(?:\|[^>]+)?>$/i);
+  const withoutPrefix = mention ? mention[1] : raw.replace(/^@+/, '');
+  if (!withoutPrefix) {
+    return '';
+  }
+
+  if (/^[UW][A-Z0-9]+$/i.test(withoutPrefix)) {
+    return withoutPrefix.toUpperCase();
+  }
+
+  return withoutPrefix.toLowerCase();
+}
+
 function mapUser(row) {
   if (!row) {
     return null;
@@ -112,7 +132,7 @@ async function isProjectMember(projectId, userId) {
 
 async function resolveMappedUserBySlackId(projectId, slackUserId) {
   const normalizedProjectId = String(projectId || '').trim();
-  const normalizedSlackId = String(slackUserId || '').trim();
+  const normalizedSlackId = normalizeSlackIdentifier(slackUserId);
   if (!normalizedProjectId || !normalizedSlackId) {
     return null;
   }
@@ -121,7 +141,7 @@ async function resolveMappedUserBySlackId(projectId, slackUserId) {
     `SELECT u.*
      FROM slack_user_map m
      JOIN users u ON u.id = m.github_user_id
-     WHERE m.project_id = $1 AND m.slack_user_id = $2
+     WHERE m.project_id = $1 AND LOWER(m.slack_user_id) = LOWER($2)
      LIMIT 1`,
     [normalizedProjectId, normalizedSlackId]
   );
@@ -131,7 +151,7 @@ async function resolveMappedUserBySlackId(projectId, slackUserId) {
 
 async function upsertSlackUserMap(projectId, slackUserId, user) {
   const normalizedProjectId = String(projectId || '').trim();
-  const normalizedSlackId = String(slackUserId || '').trim();
+  const normalizedSlackId = normalizeSlackIdentifier(slackUserId);
   if (!normalizedProjectId || !normalizedSlackId) {
     throw new Error('projectId and slackUserId are required.');
   }

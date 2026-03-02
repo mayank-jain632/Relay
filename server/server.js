@@ -672,7 +672,7 @@ function createApp() {
       }
 
       const mapping = await upsertSlackUserMap(projectId, slackUserId, user);
-      await backfillSlackAssigneeMapping(projectId, slackUserId, user);
+      await backfillSlackAssigneeMapping(projectId, mapping.slackUserId, user);
       return res.json({ ok: true, mapping });
     } catch (error) {
       return next(error);
