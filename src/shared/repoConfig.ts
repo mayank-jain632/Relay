@@ -1,5 +1,6 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { getRelayStringSetting } from './settings';
 
 export interface RepoConfig {
   apiBaseUrl: string;
@@ -7,7 +8,8 @@ export interface RepoConfig {
   baseBranch: string;
 }
 
-const CONFIG_REL_PATH = path.join('.contexthud', 'config.json');
+const RELAY_CONFIG_REL_PATH = path.join('.relay', 'config.json');
+const LEGACY_CONFIG_REL_PATH = path.join('.contexthud', 'config.json');
 
 function normalizeApiBaseUrl(raw: string): string {
   const trimmed = String(raw || '').trim();
@@ -22,58 +24,85 @@ function normalizeApiBaseUrl(raw: string): string {
   return `http://${trimmed}`.replace(/\/$/, '');
 }
 
-export function getConfigUri(): vscode.Uri | undefined {
-  const folder = vscode.workspace.workspaceFolders?.[0];
+async function pathExists(uri: vscode.Uri): Promise<boolean> {
+  try {
+    await vscode.workspace.fs.stat(uri);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getWorkspaceFolder(): vscode.WorkspaceFolder | undefined {
+  return vscode.workspace.workspaceFolders?.[0];
+}
+
+function getConfigCandidates(folder: vscode.WorkspaceFolder): vscode.Uri[] {
+  return [
+    vscode.Uri.joinPath(folder.uri, RELAY_CONFIG_REL_PATH),
+    vscode.Uri.joinPath(folder.uri, LEGACY_CONFIG_REL_PATH)
+  ];
+}
+
+export async function getConfigUri(): Promise<vscode.Uri | undefined> {
+  const folder = getWorkspaceFolder();
   if (!folder) {
     return undefined;
   }
 
-  return vscode.Uri.joinPath(folder.uri, CONFIG_REL_PATH);
+  const candidates = getConfigCandidates(folder);
+  for (const candidate of candidates) {
+    if (await pathExists(candidate)) {
+      return candidate;
+    }
+  }
+
+  return candidates[0];
 }
 
 export async function readRepoConfig(): Promise<RepoConfig | undefined> {
-  const uri = getConfigUri();
-  if (!uri) {
+  const folder = getWorkspaceFolder();
+  if (!folder) {
     return undefined;
   }
 
-  try {
-    const bytes = await vscode.workspace.fs.readFile(uri);
-    const parsed = JSON.parse(Buffer.from(bytes).toString('utf8')) as Partial<RepoConfig>;
-    if (!parsed.projectId) {
-      return undefined;
+  const candidates = getConfigCandidates(folder);
+  for (const uri of candidates) {
+    try {
+      const bytes = await vscode.workspace.fs.readFile(uri);
+      const parsed = JSON.parse(Buffer.from(bytes).toString('utf8')) as Partial<RepoConfig>;
+      if (!parsed.projectId) {
+        continue;
+      }
+
+      return {
+        apiBaseUrl: normalizeApiBaseUrl(parsed.apiBaseUrl || 'http://localhost:8787'),
+        projectId: String(parsed.projectId),
+        baseBranch: String(parsed.baseBranch || 'main')
+      };
+    } catch {
+      // try next candidate
     }
-
-    return {
-      apiBaseUrl: normalizeApiBaseUrl(parsed.apiBaseUrl || 'http://localhost:8787'),
-      projectId: String(parsed.projectId),
-      baseBranch: String(parsed.baseBranch || 'main')
-    };
-  } catch {
-    return undefined;
   }
+
+  return undefined;
 }
 
 export async function writeRepoConfig(partial?: Partial<RepoConfig>): Promise<RepoConfig> {
-  const uri = getConfigUri();
-  if (!uri) {
-    throw new Error('Open a workspace folder first.');
-  }
-
-  const folder = vscode.workspace.workspaceFolders?.[0];
+  const folder = getWorkspaceFolder();
   if (!folder) {
     throw new Error('Open a workspace folder first.');
   }
 
   const defaults: RepoConfig = {
-    apiBaseUrl: normalizeApiBaseUrl(vscode.workspace.getConfiguration('contexthud').get<string>('apiBaseUrl', 'http://localhost:8787')),
+    apiBaseUrl: normalizeApiBaseUrl(getRelayStringSetting('apiBaseUrl', 'http://localhost:8787')),
     projectId: partial?.projectId || '',
     baseBranch: partial?.baseBranch || 'main'
   };
 
   if (!defaults.projectId) {
     const enteredProjectId = await vscode.window.showInputBox({
-      title: 'Initialize ContextHUD',
+      title: 'Initialize Relay',
       prompt: 'Enter projectId from the hosted backend',
       placeHolder: 'project UUID'
     });
@@ -87,7 +116,7 @@ export async function writeRepoConfig(partial?: Partial<RepoConfig>): Promise<Re
 
   if (!partial?.apiBaseUrl) {
     const enteredApiBaseUrl = await vscode.window.showInputBox({
-      title: 'Initialize ContextHUD',
+      title: 'Initialize Relay',
       prompt: 'Enter hosted API base URL',
       value: defaults.apiBaseUrl,
       placeHolder: 'https://api.relay.dev'
@@ -102,10 +131,17 @@ export async function writeRepoConfig(partial?: Partial<RepoConfig>): Promise<Re
     defaults.apiBaseUrl = normalizeApiBaseUrl(partial.apiBaseUrl);
   }
 
-  const dir = vscode.Uri.joinPath(folder.uri, '.contexthud');
-  await vscode.workspace.fs.createDirectory(dir);
+  const relayDir = vscode.Uri.joinPath(folder.uri, '.relay');
+  const relayConfigUri = vscode.Uri.joinPath(folder.uri, RELAY_CONFIG_REL_PATH);
+  await vscode.workspace.fs.createDirectory(relayDir);
 
   const content = JSON.stringify(defaults, null, 2) + '\n';
-  await vscode.workspace.fs.writeFile(uri, Buffer.from(content, 'utf8'));
+  await vscode.workspace.fs.writeFile(relayConfigUri, Buffer.from(content, 'utf8'));
+
+  const legacyConfigUri = vscode.Uri.joinPath(folder.uri, LEGACY_CONFIG_REL_PATH);
+  if (await pathExists(legacyConfigUri)) {
+    await vscode.workspace.fs.writeFile(legacyConfigUri, Buffer.from(content, 'utf8'));
+  }
+
   return defaults;
 }

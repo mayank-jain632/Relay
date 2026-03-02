@@ -1,30 +1,38 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { UserMapping } from './types';
+import { getRelayStringSetting } from './settings';
+
+async function readMappingFile(uri: vscode.Uri): Promise<UserMapping | undefined> {
+  try {
+    const bytes = await vscode.workspace.fs.readFile(uri);
+    const text = Buffer.from(bytes).toString('utf8');
+    return JSON.parse(text) as UserMapping;
+  } catch {
+    return undefined;
+  }
+}
 
 export async function loadUserMapping(): Promise<UserMapping> {
-  const config = vscode.workspace.getConfiguration('contexthud');
-  const relativePath = config.get<string>('userMappingPath', '.contexthud/users.json');
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-
   if (!workspaceFolder) {
     return {};
   }
 
-  const mappingUri = vscode.Uri.joinPath(workspaceFolder.uri, relativePath);
-
-  try {
-    const bytes = await vscode.workspace.fs.readFile(mappingUri);
-    const text = Buffer.from(bytes).toString('utf8');
-    const parsed = JSON.parse(text) as UserMapping;
-    return parsed;
-  } catch {
-    return {};
+  const relativePath = getRelayStringSetting('userMappingPath', '.relay/users.json');
+  const primaryUri = vscode.Uri.joinPath(workspaceFolder.uri, relativePath);
+  const primary = await readMappingFile(primaryUri);
+  if (primary) {
+    return primary;
   }
+
+  const legacyUri = vscode.Uri.joinPath(workspaceFolder.uri, '.contexthud', 'users.json');
+  const legacy = await readMappingFile(legacyUri);
+  return legacy || {};
 }
 
 export async function getCurrentUser(): Promise<string> {
-  const configUser = vscode.workspace.getConfiguration('contexthud').get<string>('currentUser', '').trim();
+  const configUser = getRelayStringSetting('currentUser', '').trim();
   if (configUser) {
     return configUser;
   }
@@ -38,5 +46,5 @@ export function resolveAssigneeFromSlackId(mapping: UserMapping, slackId: string
 }
 
 export function getDefaultUserMappingPath(workspacePath: string): string {
-  return path.join(workspacePath, '.contexthud', 'users.json');
+  return path.join(workspacePath, '.relay', 'users.json');
 }

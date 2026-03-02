@@ -33,6 +33,7 @@ import {
 } from './git/git';
 import { getActiveTaskId, setActiveTaskId } from './state/activeTask';
 import { readRepoConfig, writeRepoConfig } from './shared/repoConfig';
+import { getRelayNumberSetting, getRelayStringSetting } from './shared/settings';
 
 let currentTasks: Task[] = [];
 let refreshTimeoutHandle: NodeJS.Timeout | undefined;
@@ -49,8 +50,9 @@ let taskScope: 'my' | 'all' = 'all';
 let configReady = false;
 let lastSyncAt: string | undefined;
 
-const SESSION_TOKEN_KEY = 'contexthud.sessionToken.v1';
-const diagnosticsOutput = vscode.window.createOutputChannel('ContextHUD Diagnostics');
+const SESSION_TOKEN_KEY = 'relay.sessionToken.v1';
+const LEGACY_SESSION_TOKEN_KEY = 'contexthud.sessionToken.v1';
+const diagnosticsOutput = vscode.window.createOutputChannel('Relay Diagnostics');
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const sidebar = new SidebarProvider();
@@ -59,9 +61,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   maybeShowSecondarySidebarOnboarding(context);
 
-  const storedToken = await context.secrets.get(SESSION_TOKEN_KEY);
+  const storedToken = (await context.secrets.get(SESSION_TOKEN_KEY)) || (await context.secrets.get(LEGACY_SESSION_TOKEN_KEY));
   if (storedToken) {
     setAuthToken(storedToken);
+    await context.secrets.store(SESSION_TOKEN_KEY, storedToken);
   }
 
   await loadRepoConfig(sidebar, { interactive: false });
@@ -118,10 +121,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         setApiContext({ apiBaseUrl: config.apiBaseUrl, projectId: config.projectId });
         configReady = true;
         refreshBackoffMs = 5000;
-        void vscode.window.showInformationMessage(`ContextHUD initialized for project ${config.projectId}.`);
+        void vscode.window.showInformationMessage(`Relay initialized for project ${config.projectId}.`);
         await refreshTasks(sidebar, { interactive: true });
       } catch (error) {
-        void vscode.window.showErrorMessage(`ContextHUD initialization failed: ${String(error)}`);
+        void vscode.window.showErrorMessage(`Relay initialization failed: ${String(error)}`);
       }
     })
   );
@@ -129,6 +132,24 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand('contexthud.diagnostics', async () => {
       await runDiagnostics();
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('relay.refresh', async () => {
+      await vscode.commands.executeCommand('contexthud.refresh');
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('relay.initializeProjectConfig', async () => {
+      await vscode.commands.executeCommand('contexthud.initializeProjectConfig');
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('relay.diagnostics', async () => {
+      await vscode.commands.executeCommand('contexthud.diagnostics');
     })
   );
 
@@ -187,15 +208,15 @@ export function deactivate(): void {
 }
 
 function maybeShowSecondarySidebarOnboarding(context: vscode.ExtensionContext): void {
-  const key = 'contexthud.onboarding.secondarySidebar.v1';
-  const seen = context.globalState.get<boolean>(key, false);
+  const key = 'relay.onboarding.secondarySidebar.v1';
+  const seen = context.globalState.get<boolean>(key, false) || context.globalState.get<boolean>('contexthud.onboarding.secondarySidebar.v1', false);
   if (seen) {
     return;
   }
 
   void context.globalState.update(key, true);
   void vscode.window.showInformationMessage(
-    'Relay tip: move ContextHUD to the right side. Right-click the ContextHUD view title -> Move View -> Secondary Side Bar.'
+    'Relay tip: move Relay to the right side. Right-click the Relay view title -> Move View -> Secondary Side Bar.'
   );
 }
 
@@ -207,9 +228,9 @@ async function loadRepoConfig(sidebar: SidebarProvider, options: { interactive: 
     currentTasks = [];
     sidebar.updateTasks([]);
     if (options.interactive) {
-      const action = 'Initialize ContextHUD for this repo';
+      const action = 'Initialize Relay for this repo';
       const selected = await vscode.window.showWarningMessage(
-        'ContextHUD config missing. Create .contexthud/config.json to continue.',
+        'Relay config missing. Create .relay/config.json (or legacy .contexthud/config.json) to continue.',
         action
       );
       if (selected === action) {
@@ -254,6 +275,7 @@ async function refreshAuthState(context: vscode.ExtensionContext, sidebar: Sideb
     taskScope = 'all';
     setAuthToken(undefined);
     await context.secrets.delete(SESSION_TOKEN_KEY);
+    await context.secrets.delete(LEGACY_SESSION_TOKEN_KEY);
   }
 
   updateSidebarAuthState(sidebar);
@@ -367,7 +389,7 @@ async function refreshTasks(sidebar: SidebarProvider, options: RefreshOptions): 
       taskScope = 'all';
       updateSidebarAuthState(sidebar);
       if (options.interactive) {
-        void vscode.window.showWarningMessage('You are signed out. Use Sign in with GitHub in ContextHUD.');
+        void vscode.window.showWarningMessage('You are signed out. Use Sign in with GitHub in Relay.');
       }
     } else if (msg.includes('403')) {
       if (options.interactive) {
@@ -375,7 +397,7 @@ async function refreshTasks(sidebar: SidebarProvider, options: RefreshOptions): 
       }
     } else if (options.interactive) {
       const retry = 'Retry';
-      const picked = await vscode.window.showErrorMessage(`ContextHUD failed to fetch tasks: ${msg}`, retry);
+      const picked = await vscode.window.showErrorMessage(`Relay failed to fetch tasks: ${msg}`, retry);
       if (picked === retry) {
         await refreshTasks(sidebar, { interactive: true });
       }
@@ -474,7 +496,7 @@ async function patchTaskRequest(taskId: string, patch: Record<string, unknown>):
 async function startTask(taskId: string): Promise<Task> {
   const task = await getTaskById(taskId);
   const repoRoot = await getRepoRootCached();
-  const prefix = vscode.workspace.getConfiguration('contexthud').get<string>('git.branchPrefix', 'ch');
+  const prefix = getRelayStringSetting('git.branchPrefix', 'ch');
   const branchName = buildBranchName(prefix || 'ch', task.id, task.title || task.description);
 
   const result = await checkoutOrCreateBranch(repoRoot, branchName);
@@ -508,7 +530,7 @@ async function openPr(taskId: string): Promise<void> {
   }
 
   const remote = await getRemoteOriginUrl(repoRoot);
-  const configuredBase = (await readRepoConfig())?.baseBranch || vscode.workspace.getConfiguration('contexthud').get<string>('git.baseBranch', 'main') || 'main';
+  const configuredBase = (await readRepoConfig())?.baseBranch || getRelayStringSetting('git.baseBranch', 'main') || 'main';
   const baseBranch = await detectBaseBranch(repoRoot, configuredBase);
   const compareUrl = buildGitHubCompareUrl(remote, baseBranch, task.branchName);
 
@@ -624,7 +646,7 @@ async function viewTaskDiffForTask(taskId: string): Promise<void> {
     return;
   }
 
-  const baseBranch = (await readRepoConfig())?.baseBranch || vscode.workspace.getConfiguration('contexthud').get<string>('git.baseBranch', 'main') || 'main';
+  const baseBranch = (await readRepoConfig())?.baseBranch || getRelayStringSetting('git.baseBranch', 'main') || 'main';
   const content = await showTaskDiff(repoRoot, baseBranch, task.branchName);
   const header = `# Task Diff\n# Base: ${baseBranch}\n# Branch: ${task.branchName}\n\n`;
 
@@ -636,7 +658,7 @@ async function viewTaskDiffForTask(taskId: string): Promise<void> {
 }
 
 function startCommitLinkPolling(context: vscode.ExtensionContext, sidebar: SidebarProvider): void {
-  const intervalSec = Math.max(5, Number(vscode.workspace.getConfiguration('contexthud').get<number>('git.commitPollIntervalSec', 15)));
+  const intervalSec = Math.max(5, Number(getRelayNumberSetting('git.commitPollIntervalSec', 15)));
 
   commitPollHandle = setInterval(() => {
     void pollActiveTaskCommit(context, sidebar);
@@ -697,7 +719,7 @@ async function pollActiveTaskCommit(context: vscode.ExtensionContext, sidebar: S
 
 async function runDiagnostics(): Promise<void> {
   diagnosticsOutput.clear();
-  diagnosticsOutput.appendLine('ContextHUD Diagnostics');
+  diagnosticsOutput.appendLine('Relay Diagnostics');
   diagnosticsOutput.appendLine(`time: ${new Date().toISOString()}`);
 
   const config = await readRepoConfig();

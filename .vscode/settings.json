@@ -1,6 +1,10 @@
 {
+  "relay.currentUser": "Mayank Jain",
+  "relay.userMappingPath": ".relay/users.json",
+  "relay.apiBaseUrl": "https://relay-production-9927.up.railway.app",
+  "relay.user.handle": "mayank-jain632",
+
   "contexthud.currentUser": "Mayank Jain",
   "contexthud.userMappingPath": ".contexthud/users.json",
-  "contexthud.apiBaseUrl": "https://relay-production-9927.up.railway.app",
-  "contexthud.socketUrl": "https://relay-production-9927.up.railway.app"
+  "contexthud.apiBaseUrl": "https://relay-production-9927.up.railway.app"
 }

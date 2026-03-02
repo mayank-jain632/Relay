@@ -1,15 +1,20 @@
 const fs = require('fs');
 const path = require('path');
 
-const USER_MAP_PATH = path.join(process.cwd(), '.contexthud', 'users.json');
+const USER_MAP_PATH = path.join(process.cwd(), '.relay', 'users.json');
+const LEGACY_USER_MAP_PATH = path.join(process.cwd(), '.contexthud', 'users.json');
 
 function readUserMap() {
-  try {
-    const raw = fs.readFileSync(USER_MAP_PATH, 'utf8');
-    return JSON.parse(raw);
-  } catch {
-    return {};
+  for (const candidate of [USER_MAP_PATH, LEGACY_USER_MAP_PATH]) {
+    try {
+      const raw = fs.readFileSync(candidate, 'utf8');
+      return JSON.parse(raw);
+    } catch {
+      // try next
+    }
   }
+
+  return {};
 }
 
 function normalizeSlackLookupKey(value) {
@@ -52,6 +57,7 @@ function resolveAssignee(slackUserId) {
 
 module.exports = {
   USER_MAP_PATH,
+  LEGACY_USER_MAP_PATH,
   normalizeSlackLookupKey,
   readUserMap,
   resolveAssignee,

@@ -39,7 +39,7 @@ export function getApiContext(): ApiContext | undefined {
 
 function requireApiContext(): ApiContext {
   if (!apiContext?.projectId) {
-    throw new Error('ContextHUD project config is missing. Initialize .contexthud/config.json.');
+    throw new Error('Relay project config is missing. Initialize .relay/config.json (or legacy .contexthud/config.json).');
   }
 
   return apiContext;

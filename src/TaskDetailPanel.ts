@@ -67,7 +67,7 @@ export class TaskDetailPanel {
     this.panel.webview.html = this.getHtml();
     this.panel.webview.onDidReceiveMessage((message: DetailMessage) => {
       void this.handleMessage(message).catch((error) => {
-        void vscode.window.showErrorMessage(`ContextHUD action failed: ${String(error)}`);
+        void vscode.window.showErrorMessage(`Relay action failed: ${String(error)}`);
       });
     });
     this.panel.onDidDispose(() => TaskDetailPanel.panels.delete(this.taskId));

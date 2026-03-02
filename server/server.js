@@ -117,22 +117,22 @@ function buildStatusMessage(task) {
   const prPart = task.prUrl ? ` (${task.prUrl})` : '';
 
   if (task.status === 'in_progress') {
-    return `🟦 ContextHUD: ${assignee} started this task -> ${statusLabel}${branchPart}`;
+    return `🟦 Relay: ${assignee} started this task -> ${statusLabel}${branchPart}`;
   }
 
   if (task.status === 'review') {
-    return `🟨 ContextHUD: PR opened -> ${statusLabel}${branchPart}${prPart}`;
+    return `🟨 Relay: PR opened -> ${statusLabel}${branchPart}${prPart}`;
   }
 
   if (task.status === 'done') {
-    return `✅ ContextHUD: Marked ${statusLabel}${branchPart}`;
+    return `✅ Relay: Marked ${statusLabel}${branchPart}`;
   }
 
   if (task.status === 'blocked') {
-    return `⛔ ContextHUD: Status updated -> ${statusLabel}${branchPart}`;
+    return `⛔ Relay: Status updated -> ${statusLabel}${branchPart}`;
   }
 
-  return `🔄 ContextHUD: Status updated -> ${statusLabel}${branchPart}`;
+  return `🔄 Relay: Status updated -> ${statusLabel}${branchPart}`;
 }
 
 async function postStatusToSlack(task) {
@@ -256,7 +256,7 @@ async function fetchGitHubProfile(accessToken) {
   const profileResponse = await fetch('https://api.github.com/user', {
     headers: {
       Authorization: `Bearer ${accessToken}`,
-      'User-Agent': 'relay-contexthud',
+      'User-Agent': 'relay',
       Accept: 'application/vnd.github+json'
     }
   });
@@ -272,7 +272,7 @@ async function fetchGitHubProfile(accessToken) {
     const emailResponse = await fetch('https://api.github.com/user/emails', {
       headers: {
         Authorization: `Bearer ${accessToken}`,
-        'User-Agent': 'relay-contexthud',
+        'User-Agent': 'relay',
         Accept: 'application/vnd.github+json'
       }
     });

@@ -1,9 +1,9 @@
 {
   "name": "contexthud",
-  "displayName": "ContextHUD",
+  "displayName": "Relay",
   "version": "0.0.1",
   "private": true,
-  "description": "Slack-to-IDE prioritized task HUD",
+  "description": "Relay: Slack-to-IDE task execution",
   "main": "./dist/extension.js",
   "engines": {
     "vscode": "^1.90.0"
@@ -17,7 +17,7 @@
       "activitybar": [
         {
           "id": "contexthud",
-          "title": "ContextHUD",
+          "title": "Relay",
           "icon": "resources/icon.svg"
         }
       ]
@@ -26,63 +26,99 @@
       "contexthud": [
         {
           "id": "contexthud.sidebar",
-          "name": "My Priority Queue",
+          "name": "My Tasks",
           "type": "webview"
         }
       ]
     },
     "commands": [
       {
-        "command": "contexthud.refresh",
-        "title": "ContextHUD: Refresh"
+        "command": "relay.refresh",
+        "title": "Relay: Refresh"
       },
       {
-        "command": "contexthud.initializeProjectConfig",
-        "title": "ContextHUD: Initialize Project Config"
+        "command": "relay.initializeProjectConfig",
+        "title": "Relay: Initialize Project Config"
       },
       {
-        "command": "contexthud.diagnostics",
-        "title": "ContextHUD: Run Diagnostics"
+        "command": "relay.diagnostics",
+        "title": "Relay: Run Diagnostics"
       }
     ],
     "configuration": {
-      "title": "ContextHUD",
+      "title": "Relay",
       "properties": {
-        "contexthud.currentUser": {
+        "relay.currentUser": {
           "type": "string",
           "default": "",
           "description": "Local/GitHub username used for private task filtering."
         },
-        "contexthud.userMappingPath": {
+        "relay.userMappingPath": {
           "type": "string",
-          "default": ".contexthud/users.json",
+          "default": ".relay/users.json",
           "description": "Workspace-relative JSON mapping of Slack user IDs to local usernames."
         },
-        "contexthud.apiBaseUrl": {
+        "relay.apiBaseUrl": {
           "type": "string",
           "default": "http://localhost:8787",
           "description": "Backend API base URL."
         },
-        "contexthud.user.handle": {
+        "relay.user.handle": {
           "type": "string",
           "default": "",
           "description": "Assignee handle used for task filtering in the IDE (assignee=handle)."
         },
-        "contexthud.git.branchPrefix": {
+        "relay.git.branchPrefix": {
           "type": "string",
           "default": "ch",
           "description": "Branch prefix used when starting tasks."
         },
-        "contexthud.git.baseBranch": {
+        "relay.git.baseBranch": {
           "type": "string",
           "default": "main",
           "description": "Base branch used for GitHub compare URL generation."
+        },
+        "relay.git.commitPollIntervalSec": {
+          "type": "number",
+          "default": 15,
+          "minimum": 5,
+          "description": "Polling interval in seconds for detecting new commits on active task branch."
+        },
+        "contexthud.currentUser": {
+          "type": "string",
+          "default": "",
+          "description": "[Legacy] Use relay.currentUser instead."
+        },
+        "contexthud.userMappingPath": {
+          "type": "string",
+          "default": ".contexthud/users.json",
+          "description": "[Legacy] Use relay.userMappingPath instead."
+        },
+        "contexthud.apiBaseUrl": {
+          "type": "string",
+          "default": "http://localhost:8787",
+          "description": "[Legacy] Use relay.apiBaseUrl instead."
+        },
+        "contexthud.user.handle": {
+          "type": "string",
+          "default": "",
+          "description": "[Legacy] Use relay.user.handle instead."
+        },
+        "contexthud.git.branchPrefix": {
+          "type": "string",
+          "default": "ch",
+          "description": "[Legacy] Use relay.git.branchPrefix instead."
+        },
+        "contexthud.git.baseBranch": {
+          "type": "string",
+          "default": "main",
+          "description": "[Legacy] Use relay.git.baseBranch instead."
         },
         "contexthud.git.commitPollIntervalSec": {
           "type": "number",
           "default": 15,
           "minimum": 5,
-          "description": "Polling interval in seconds for detecting new commits on active task branch."
+          "description": "[Legacy] Use relay.git.commitPollIntervalSec instead."
         }
       }
     }
