@@ -1,6 +1,6 @@
 {
   "contexthud.currentUser": "Mayank Jain",
   "contexthud.userMappingPath": ".contexthud/users.json",
-  "contexthud.apiBaseUrl": "http://localhost:8787",
-  "contexthud.socketUrl": "http://localhost:8787"
+  "contexthud.apiBaseUrl": "https://relay-production-9927.up.railway.app",
+  "contexthud.socketUrl": "https://relay-production-9927.up.railway.app"
 }
