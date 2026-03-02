@@ -75,6 +75,15 @@ function getBearerToken(req) {
 }
 
 
+
+function secretFingerprint(value) {
+  if (!value) {
+    return 'empty';
+  }
+
+  return crypto.createHash('sha256').update(String(value)).digest('hex').slice(0, 12);
+}
+
 function normalizeSecret(value) {
   const raw = String(value || '').trim();
   if (!raw) {
@@ -447,6 +456,7 @@ function createApp() {
     const headerKey = normalizeSecret(req.headers['x-admin-api-key']);
     const bearerKey = normalizeSecret(getBearerToken(req));
     const queryKey = normalizeSecret(req.query?.adminKey);
+    const source = headerKey ? 'header' : bearerKey ? 'bearer' : queryKey ? 'query' : 'none';
     const actual = headerKey || bearerKey || queryKey;
 
     if (!expected) {
@@ -458,7 +468,15 @@ function createApp() {
     }
 
     if (expected !== actual) {
-      return res.status(401).json({ error: 'Invalid admin key', reason: 'mismatch' });
+      log('error', 'admin_key_mismatch', {
+        requestId: req.requestId,
+        source,
+        expectedLength: expected.length,
+        actualLength: actual.length,
+        expectedFingerprint: secretFingerprint(expected),
+        actualFingerprint: secretFingerprint(actual)
+      });
+      return res.status(401).json({ error: 'Invalid admin key', reason: 'mismatch', source });
     }
 
     return next();
