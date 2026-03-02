@@ -21,5 +21,10 @@ export function getDashboardBaseUrl(): string {
 }
 
 export function getAdminApiKey(): string {
-  return String(process.env.ADMIN_API_KEY || '').trim();
+  return String(
+    process.env.DASHBOARD_ADMIN_API_KEY ||
+      process.env.RELAY_ADMIN_API_KEY ||
+      process.env.ADMIN_API_KEY ||
+      ''
+  ).trim();
 }

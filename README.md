@@ -82,7 +82,8 @@ Dashboard env vars (see `dashboard/.env.example`):
 - `NEXT_PUBLIC_API_BASE_URL` (same value; used in snippets/UI)
 - `DASHBOARD_BASE_URL` (e.g. `http://localhost:3001`)
 - `DASHBOARD_SESSION_SECRET` (required for httpOnly session cookies)
-- `ADMIN_API_KEY` (optional fallback for admin-only project creation)
+- `DASHBOARD_ADMIN_API_KEY` (recommended if project creation is admin-only on API)
+- `RELAY_ADMIN_API_KEY` or `ADMIN_API_KEY` (legacy fallbacks)
 
 ## 4) Slack Setup
 

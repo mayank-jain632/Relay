@@ -25,7 +25,12 @@ export async function POST(request: Request) {
 
     return NextResponse.redirect(new URL('/projects?created=1', request.url));
   } catch (error) {
-    const message = encodeURIComponent(String(error instanceof Error ? error.message : error));
-    return NextResponse.redirect(new URL(`/projects?error=${message}`, request.url));
+    const message = String(error instanceof Error ? error.message : error);
+    if (message.includes('403') && message.toLowerCase().includes('admin')) {
+      return NextResponse.redirect(new URL('/projects?error=admin_required', request.url));
+    }
+
+    const encoded = encodeURIComponent(message);
+    return NextResponse.redirect(new URL(`/projects?error=${encoded}`, request.url));
   }
 }
