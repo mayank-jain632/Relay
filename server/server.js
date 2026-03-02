@@ -679,6 +679,50 @@ function createApp() {
     }
   });
 
+  app.get('/admin/projects/:projectId/debug-assignment', requireAdmin, async (req, res, next) => {
+    try {
+      const projectId = String(req.params.projectId || '').trim();
+
+      const [membersResult, mappingsResult, tasksResult] = await Promise.all([
+        query(
+          `SELECT pm.project_id, pm.user_id, pm.role, u.login, u.name, u.github_id
+           FROM project_members pm
+           JOIN users u ON u.id = pm.user_id
+           WHERE pm.project_id = $1
+           ORDER BY u.login ASC`,
+          [projectId]
+        ),
+        query(
+          `SELECT m.project_id, m.slack_user_id, m.github_user_id, u.login, u.name
+           FROM slack_user_map m
+           JOIN users u ON u.id = m.github_user_id
+           WHERE m.project_id = $1
+           ORDER BY m.slack_user_id ASC`,
+          [projectId]
+        ),
+        query(
+          `SELECT id, title, assignee_id, assigned_to_user_id, pending_slack_assignee, slack_user_id, status, created_at
+           FROM tasks
+           WHERE project_id = $1
+           ORDER BY created_at DESC
+           LIMIT 25`,
+          [projectId]
+        )
+      ]);
+
+      return res.json({
+        ok: true,
+        projectId,
+        members: membersResult.rows,
+        slackMappings: mappingsResult.rows,
+        recentTasks: tasksResult.rows
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+
   app.post('/ingest/slack/:projectId', async (req, res, next) => {
     try {
       if (!verifySlackSignature(req)) {
