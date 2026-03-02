@@ -18,9 +18,13 @@ const {
 const {
   addProjectMember,
   createProject,
+  getProjectMembership,
   getUserById,
   getUserByLogin,
   isProjectMember,
+  listProjectMembers,
+  listProjectsForUser,
+  listSlackUserMappings,
   resolveMappedUserBySlackId,
   upsertGitHubUser,
   upsertSlackUserMap
@@ -73,8 +77,6 @@ function getBearerToken(req) {
 
   return authHeader.slice('Bearer '.length).trim();
 }
-
-
 
 function secretFingerprint(value) {
   if (!value) {
@@ -223,7 +225,7 @@ function renderAuthSuccessPage() {
   <body>
     <div class="card">
       <h1>✅ Signed in to Relay</h1>
-      <p>You can close this tab and return to VS Code.</p>
+      <p>You can close this tab and return to your app.</p>
     </div>
   </body>
 </html>`;
@@ -293,6 +295,67 @@ async function fetchGitHubProfile(accessToken) {
     avatar_url: profile.avatar_url || null,
     email
   };
+}
+
+function normalizeRole(role) {
+  const value = String(role || 'member').trim().toLowerCase();
+  if (value === 'owner') {
+    return 'owner';
+  }
+  return 'member';
+}
+
+function parseAdminLogins() {
+  return new Set(
+    String(process.env.ADMIN_GITHUB_LOGINS || '')
+      .split(',')
+      .map((entry) => entry.trim().toLowerCase())
+      .filter(Boolean)
+  );
+}
+
+function hasValidAdminKey(req, options = { logMismatch: false }) {
+  const expected = normalizeSecret(process.env.ADMIN_API_KEY);
+  const headerKey = normalizeSecret(req.headers['x-admin-api-key']);
+  const bearerKey = normalizeSecret(getBearerToken(req));
+  const queryKey = normalizeSecret(req.query?.adminKey);
+  const source = headerKey ? 'header' : bearerKey ? 'bearer' : queryKey ? 'query' : 'none';
+  const actual = headerKey || bearerKey || queryKey;
+
+  if (!expected || !actual) {
+    return { ok: false, reason: !expected ? 'server_missing' : 'request_missing', source };
+  }
+
+  if (expected !== actual) {
+    if (options.logMismatch) {
+      log('error', 'admin_key_mismatch', {
+        requestId: req.requestId,
+        source,
+        expectedLength: expected.length,
+        actualLength: actual.length,
+        expectedFingerprint: secretFingerprint(expected),
+        actualFingerprint: secretFingerprint(actual)
+      });
+    }
+
+    return { ok: false, reason: 'mismatch', source };
+  }
+
+  return { ok: true, source };
+}
+
+function isPlatformAdmin(req) {
+  const byKey = hasValidAdminKey(req, { logMismatch: false });
+  if (byKey.ok) {
+    return true;
+  }
+
+  const admins = parseAdminLogins();
+  if (admins.size === 0) {
+    return false;
+  }
+
+  return admins.has(String(req.user?.login || '').toLowerCase());
 }
 
 async function ingestSlackTask(projectId, payload) {
@@ -435,48 +498,48 @@ function createApp() {
 
   async function requireProjectMembership(req, res, next) {
     try {
-      const projectId = String(req.params.projectId || '').trim();
+      const projectId = String(req.params.projectId || req.params.id || '').trim();
       if (!projectId) {
         return res.status(400).json({ error: 'projectId is required' });
       }
 
-      const member = await isProjectMember(projectId, req.user.userId);
+      const member = await getProjectMembership(projectId, req.user.userId);
       if (!member) {
         return res.status(403).json({ error: 'Not a project member' });
       }
 
+      req.projectId = projectId;
+      req.projectMembership = member;
       next();
     } catch (error) {
       next(error);
     }
   }
 
+  function requireProjectOwnerOrAdmin(req, res, next) {
+    if (isPlatformAdmin(req)) {
+      return next();
+    }
+
+    if (String(req.projectMembership?.role || '').toLowerCase() === 'owner') {
+      return next();
+    }
+
+    return res.status(403).json({ error: 'Owner role required' });
+  }
+
   function requireAdmin(req, res, next) {
-    const expected = normalizeSecret(process.env.ADMIN_API_KEY);
-    const headerKey = normalizeSecret(req.headers['x-admin-api-key']);
-    const bearerKey = normalizeSecret(getBearerToken(req));
-    const queryKey = normalizeSecret(req.query?.adminKey);
-    const source = headerKey ? 'header' : bearerKey ? 'bearer' : queryKey ? 'query' : 'none';
-    const actual = headerKey || bearerKey || queryKey;
-
-    if (!expected) {
-      return res.status(401).json({ error: 'Invalid admin key', reason: 'server_missing' });
+    const result = hasValidAdminKey(req, { logMismatch: true });
+    if (!result.ok) {
+      return res.status(401).json({ error: 'Invalid admin key', reason: result.reason, source: result.source });
     }
 
-    if (!actual) {
-      return res.status(401).json({ error: 'Invalid admin key', reason: 'request_missing' });
-    }
+    return next();
+  }
 
-    if (expected !== actual) {
-      log('error', 'admin_key_mismatch', {
-        requestId: req.requestId,
-        source,
-        expectedLength: expected.length,
-        actualLength: actual.length,
-        expectedFingerprint: secretFingerprint(expected),
-        actualFingerprint: secretFingerprint(actual)
-      });
-      return res.status(401).json({ error: 'Invalid admin key', reason: 'mismatch', source });
+  function requirePlatformAdmin(req, res, next) {
+    if (!isPlatformAdmin(req)) {
+      return res.status(403).json({ error: 'Admin privileges required' });
     }
 
     return next();
@@ -598,6 +661,7 @@ function createApp() {
     res.json(req.user);
   });
 
+  // Admin key endpoints (for ops and bootstrapping)
   app.post('/admin/projects', requireAdmin, async (req, res, next) => {
     try {
       const name = String(req.body?.name || '').trim() || 'Untitled Project';
@@ -629,7 +693,7 @@ function createApp() {
       const projectId = String(req.params.projectId || '').trim();
       const githubLogin = String(req.body?.githubLogin || '').trim();
       const userId = String(req.body?.userId || '').trim();
-      const role = String(req.body?.role || 'member').trim();
+      const role = normalizeRole(req.body?.role);
 
       let user = null;
       if (userId) {
@@ -722,8 +786,148 @@ function createApp() {
     }
   });
 
+  // Authenticated project management endpoints (dashboard)
+  app.get('/projects', requireAuth, async (req, res, next) => {
+    try {
+      const projects = await listProjectsForUser(req.user.userId);
+      return res.json({ ok: true, projects });
+    } catch (error) {
+      return next(error);
+    }
+  });
 
-  app.post('/ingest/slack/:projectId', async (req, res, next) => {
+  app.post('/projects', requireAuth, requirePlatformAdmin, async (req, res, next) => {
+    try {
+      const name = String(req.body?.name || '').trim() || 'Untitled Project';
+      const project = await createProject(name);
+      await addProjectMember(project.id, req.user.userId, 'owner');
+      return res.json({ ok: true, project });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.get('/projects/:projectId/members', requireAuth, requireProjectMembership, async (req, res, next) => {
+    try {
+      const members = await listProjectMembers(req.projectId);
+      return res.json({ ok: true, members });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post('/projects/:projectId/members', requireAuth, requireProjectMembership, requireProjectOwnerOrAdmin, async (req, res, next) => {
+    try {
+      const githubLogin = String(req.body?.githubLogin || '').trim();
+      const userId = String(req.body?.userId || '').trim();
+      const role = normalizeRole(req.body?.role);
+
+      let user = null;
+      if (userId) {
+        user = await getUserById(userId);
+      }
+      if (!user && githubLogin) {
+        user = await getUserByLogin(githubLogin);
+      }
+      if (!user) {
+        return res.status(404).json({ error: 'User not found' });
+      }
+
+      const member = await addProjectMember(req.projectId, user.userId, role);
+      return res.json({ ok: true, member });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.get('/projects/:projectId/slack/status', requireAuth, requireProjectMembership, async (req, res, next) => {
+    try {
+      const [configResult, lastEventResult, mappings] = await Promise.all([
+        query(`SELECT slack_workspace_id, default_channel_id, created_at FROM slack_project_config WHERE project_id = $1 LIMIT 1`, [req.projectId]),
+        query(`SELECT MAX(created_at) AS last_event_at FROM tasks WHERE project_id = $1 AND source = 'slack'`, [req.projectId]),
+        listSlackUserMappings(req.projectId)
+      ]);
+
+      const config = configResult.rows[0] || null;
+      const lastEventAt = lastEventResult.rows[0]?.last_event_at || null;
+      const requestUrl = `${appBaseUrl}/ingest/slack/${req.projectId}`;
+
+      return res.json({
+        ok: true,
+        verified: Boolean(lastEventAt || config?.slack_workspace_id),
+        requestUrl,
+        lastEventAt,
+        slackWorkspaceId: config?.slack_workspace_id || null,
+        defaultChannelId: config?.default_channel_id || null,
+        mappedUsersCount: mappings.length
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.get('/projects/:projectId/slack/users', requireAuth, requireProjectMembership, async (req, res, next) => {
+    try {
+      const [mappedUsers, seenResult] = await Promise.all([
+        listSlackUserMappings(req.projectId),
+        query(
+          `SELECT
+             COALESCE(NULLIF(pending_slack_assignee, ''), NULLIF(slack_user_id, ''), NULLIF(assignee_id, '')) AS slack_user_id,
+             MAX(created_at) AS last_seen_at
+           FROM tasks
+           WHERE project_id = $1
+             AND source = 'slack'
+             AND COALESCE(NULLIF(pending_slack_assignee, ''), NULLIF(slack_user_id, ''), NULLIF(assignee_id, '')) IS NOT NULL
+           GROUP BY 1
+           ORDER BY MAX(created_at) DESC`,
+          [req.projectId]
+        )
+      ]);
+
+      const mappedKeys = new Set(mappedUsers.map((entry) => String(entry.slackUserId || '').toLowerCase()));
+      const unmappedUsers = seenResult.rows
+        .map((row) => ({
+          slackUserId: row.slack_user_id,
+          lastSeenAt: row.last_seen_at
+        }))
+        .filter((entry) => entry.slackUserId && !mappedKeys.has(String(entry.slackUserId).toLowerCase()));
+
+      return res.json({ ok: true, mappedUsers, unmappedUsers });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post('/projects/:projectId/slack/map-user', requireAuth, requireProjectMembership, requireProjectOwnerOrAdmin, async (req, res, next) => {
+    try {
+      const slackUserId = String(req.body?.slackUserId || '').trim();
+      const githubLogin = String(req.body?.githubLogin || '').trim();
+      const githubUserId = String(req.body?.githubUserId || '').trim();
+
+      if (!slackUserId) {
+        return res.status(400).json({ error: 'slackUserId is required' });
+      }
+
+      let user = null;
+      if (githubUserId) {
+        user = await getUserById(githubUserId);
+      }
+      if (!user && githubLogin) {
+        user = await getUserByLogin(githubLogin);
+      }
+      if (!user) {
+        return res.status(404).json({ error: 'GitHub user not found' });
+      }
+
+      const mapping = await upsertSlackUserMap(req.projectId, slackUserId, user);
+      await backfillSlackAssigneeMapping(req.projectId, mapping.slackUserId, user);
+      return res.json({ ok: true, mapping });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post('/ingest/slack/:projectId', async (req, res) => {
     try {
       if (!verifySlackSignature(req)) {
         return res.status(401).json({ ok: false, error: 'invalid_slack_signature' });
@@ -732,12 +936,10 @@ function createApp() {
       const projectId = String(req.params.projectId || '').trim();
       const body = req.body || {};
 
-      // Slack Event Subscriptions URL verification handshake.
       if (body.type === 'url_verification' && body.challenge) {
         return res.status(200).json({ challenge: body.challenge });
       }
 
-      // Ignore bot-originated events to avoid loops.
       if (body.type === 'event_callback' && body.event && body.event.bot_id) {
         return res.status(200).json({ ok: true, ignored: 'bot_event' });
       }
@@ -758,7 +960,7 @@ function createApp() {
     }
   });
 
-  app.post('/ingest/slack-nudge/:projectId', async (req, res, next) => {
+  app.post('/ingest/slack-nudge/:projectId', async (req, res) => {
     try {
       if (!verifySlackSignature(req)) {
         return res.status(401).json({ ok: false, error: 'invalid_slack_signature' });
@@ -800,16 +1002,66 @@ function createApp() {
 
   app.get('/projects/:projectId/tasks', requireAuth, requireProjectMembership, async (req, res, next) => {
     try {
-      const projectId = String(req.params.projectId || '').trim();
       const assigned = String(req.query.assigned || 'me').trim().toLowerCase();
 
       if (assigned === 'all') {
-        const tasks = await listTasks(projectId, {});
+        const tasks = await listTasks(req.projectId, {});
         return res.json({ tasks });
       }
 
-      const tasks = await listTasks(projectId, { assignedToUserId: req.user.userId });
+      const tasks = await listTasks(req.projectId, { assignedToUserId: req.user.userId });
       return res.json({ tasks });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post('/projects/:projectId/tasks', requireAuth, requireProjectMembership, async (req, res, next) => {
+    try {
+      const body = req.body || {};
+      const title = String(body.title || '').trim();
+      if (!title) {
+        return res.status(400).json({ error: 'title is required' });
+      }
+
+      const description = String(body.description || '').trim() || title;
+      const priority = String(body.priority || 'normal').trim().toLowerCase() || 'normal';
+      const status = String(body.status || 'todo').trim().toLowerCase() || 'todo';
+
+      let assigneeUser = null;
+      const assigneeUserId = String(body.assigneeUserId || '').trim();
+      const assigneeGithubLogin = String(body.assigneeGithubLogin || '').trim();
+
+      if (assigneeUserId) {
+        assigneeUser = await getUserById(assigneeUserId);
+      }
+      if (!assigneeUser && assigneeGithubLogin) {
+        assigneeUser = await getUserByLogin(assigneeGithubLogin);
+      }
+
+      const assigneeId = assigneeUser?.login || null;
+      const task = await createTask({
+        projectId: req.projectId,
+        assignee_id: assigneeId,
+        assignedToUserId: assigneeUser?.userId || null,
+        pendingSlackAssignee: null,
+        createdByUserId: req.user.userId,
+        updatedByUserId: req.user.userId,
+        title,
+        description,
+        status,
+        priority,
+        dueDate: body.dueDate || null,
+        orderIndex: await nextOrderIndex(req.projectId, assigneeId || 'unassigned'),
+        source: 'dashboard',
+        sourceUrl: null,
+        linkedFiles: Array.isArray(body.linkedFiles) ? body.linkedFiles : [],
+        branchName: body.branchName || null,
+        prUrl: body.prUrl || null,
+        autoCloseOnMerge: Boolean(body.autoCloseOnMerge)
+      });
+
+      return res.status(201).json({ ok: true, task });
     } catch (error) {
       return next(error);
     }
@@ -817,9 +1069,8 @@ function createApp() {
 
   app.get('/projects/:projectId/tasks/:taskId', requireAuth, requireProjectMembership, async (req, res, next) => {
     try {
-      const projectId = String(req.params.projectId || '').trim();
       const taskId = String(req.params.taskId || '').trim();
-      const task = await getTaskById(projectId, taskId);
+      const task = await getTaskById(req.projectId, taskId);
       if (!task) {
         return res.status(404).json({ error: 'Task not found' });
       }
@@ -832,18 +1083,47 @@ function createApp() {
 
   app.patch('/projects/:projectId/tasks/:taskId', requireAuth, requireProjectMembership, async (req, res, next) => {
     try {
-      const projectId = String(req.params.projectId || '').trim();
       const taskId = String(req.params.taskId || '').trim();
-      const before = await getTaskById(projectId, taskId);
+      const before = await getTaskById(req.projectId, taskId);
       if (!before) {
         return res.status(404).json({ error: 'Task not found' });
       }
 
       const body = req.body || {};
+
+      let assignedToUserId = body.assignedToUserId;
+      let assigneeId = body.assignee_id;
+
+      if (body.assigneeGithubLogin !== undefined) {
+        const login = String(body.assigneeGithubLogin || '').trim();
+        if (!login) {
+          assignedToUserId = null;
+          assigneeId = null;
+        } else {
+          const user = await getUserByLogin(login);
+          if (!user) {
+            return res.status(404).json({ error: 'Assignee GitHub user not found' });
+          }
+          assignedToUserId = user.userId;
+          assigneeId = user.login;
+        }
+      } else if (assignedToUserId !== undefined && assignedToUserId !== null && String(assignedToUserId).trim() !== '') {
+        const user = await getUserById(String(assignedToUserId));
+        if (!user) {
+          return res.status(404).json({ error: 'Assignee user not found' });
+        }
+        assigneeId = user.login;
+      } else if (assignedToUserId === null || String(assignedToUserId || '').trim() === '') {
+        assignedToUserId = null;
+        if (body.assignedToUserId !== undefined) {
+          assigneeId = null;
+        }
+      }
+
       const allowed = Object.fromEntries(
         Object.entries({
-          assignee_id: body.assignee_id,
-          assignedToUserId: body.assignedToUserId,
+          assignee_id: assigneeId,
+          assignedToUserId,
           autoCloseOnMerge: body.autoCloseOnMerge,
           branchName: body.branchName,
           description: body.description,
@@ -857,7 +1137,7 @@ function createApp() {
         }).filter(([, value]) => value !== undefined)
       );
 
-      const task = await patchTask(projectId, taskId, allowed);
+      const task = await patchTask(req.projectId, taskId, allowed);
       if (!task) {
         return res.status(404).json({ error: 'Task not found' });
       }
@@ -882,14 +1162,13 @@ function createApp() {
 
   app.post('/projects/:projectId/tasks/:taskId/commits', requireAuth, requireProjectMembership, async (req, res, next) => {
     try {
-      const projectId = String(req.params.projectId || '').trim();
       const taskId = String(req.params.taskId || '').trim();
       const body = req.body || {};
       if (!body.sha) {
         return res.status(400).json({ error: 'sha is required' });
       }
 
-      const task = await addCommit(projectId, taskId, {
+      const task = await addCommit(req.projectId, taskId, {
         sha: String(body.sha),
         message: String(body.message || ''),
         author: String(body.author || ''),
@@ -908,9 +1187,8 @@ function createApp() {
 
   app.post('/projects/:projectId/tasks/:taskId/ai/summarize', requireAuth, requireProjectMembership, async (req, res, next) => {
     try {
-      const projectId = String(req.params.projectId || '').trim();
       const taskId = String(req.params.taskId || '').trim();
-      const task = await summarizeTask(projectId, taskId);
+      const task = await summarizeTask(req.projectId, taskId);
       if (!task) {
         return res.status(404).json({ error: 'Task not found' });
       }

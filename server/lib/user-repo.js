@@ -1,7 +1,6 @@
 const { v4: uuidv4 } = require('uuid');
 const { query } = require('./db');
 
-
 function normalizeSlackIdentifier(value) {
   const raw = String(value || '').trim();
   if (!raw) {
@@ -105,8 +104,9 @@ async function upsertGitHubUser(profile) {
 
 async function createProject(name) {
   const projectId = uuidv4();
-  await query(`INSERT INTO projects (id, name, created_at) VALUES ($1, $2, NOW())`, [projectId, String(name || '').trim() || 'Untitled']);
-  return { id: projectId, name: String(name || '').trim() || 'Untitled' };
+  const projectName = String(name || '').trim() || 'Untitled';
+  await query(`INSERT INTO projects (id, name, created_at) VALUES ($1, $2, NOW())`, [projectId, projectName]);
+  return { id: projectId, name: projectName };
 }
 
 async function addProjectMember(projectId, userId, role = 'member') {
@@ -128,6 +128,85 @@ async function isProjectMember(projectId, userId) {
   );
 
   return result.rowCount > 0;
+}
+
+async function getProjectMembership(projectId, userId) {
+  const result = await query(
+    `SELECT project_id, user_id, role
+     FROM project_members
+     WHERE project_id = $1 AND user_id = $2
+     LIMIT 1`,
+    [projectId, userId]
+  );
+
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+
+  return {
+    projectId: row.project_id,
+    userId: row.user_id,
+    role: row.role
+  };
+}
+
+async function listProjectsForUser(userId) {
+  const result = await query(
+    `SELECT p.id, p.name, p.created_at, pm.role
+     FROM project_members pm
+     JOIN projects p ON p.id = pm.project_id
+     WHERE pm.user_id = $1
+     ORDER BY p.created_at DESC`,
+    [userId]
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    role: row.role,
+    createdAt: row.created_at
+  }));
+}
+
+async function listProjectMembers(projectId) {
+  const result = await query(
+    `SELECT pm.project_id, pm.user_id, pm.role, u.login, u.name, u.avatar_url
+     FROM project_members pm
+     JOIN users u ON u.id = pm.user_id
+     WHERE pm.project_id = $1
+     ORDER BY u.login ASC`,
+    [projectId]
+  );
+
+  return result.rows.map((row) => ({
+    projectId: row.project_id,
+    userId: row.user_id,
+    role: row.role,
+    login: row.login,
+    name: row.name,
+    avatarUrl: row.avatar_url
+  }));
+}
+
+async function listSlackUserMappings(projectId) {
+  const result = await query(
+    `SELECT m.project_id, m.slack_user_id, m.github_user_id, u.login, u.name, u.avatar_url
+     FROM slack_user_map m
+     JOIN users u ON u.id = m.github_user_id
+     WHERE m.project_id = $1
+     ORDER BY m.slack_user_id ASC`,
+    [projectId]
+  );
+
+  return result.rows.map((row) => ({
+    projectId: row.project_id,
+    slackUserId: row.slack_user_id,
+    githubUserId: row.github_user_id,
+    githubLogin: row.login,
+    githubName: row.name,
+    avatarUrl: row.avatar_url
+  }));
 }
 
 async function resolveMappedUserBySlackId(projectId, slackUserId) {
@@ -179,10 +258,14 @@ async function upsertSlackUserMap(projectId, slackUserId, user) {
 module.exports = {
   addProjectMember,
   createProject,
+  getProjectMembership,
   getUserByGithubId,
   getUserById,
   getUserByLogin,
   isProjectMember,
+  listProjectMembers,
+  listProjectsForUser,
+  listSlackUserMappings,
   resolveMappedUserBySlackId,
   upsertGitHubUser,
   upsertSlackUserMap

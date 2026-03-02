@@ -1,54 +1,60 @@
 # Relay
 
-Relay is a Slack-to-IDE workflow extension with a hosted backend.
-
-This repo currently supports:
-
-- Hosted backend with Postgres
-- Multi-project scoping (`projectId`)
-- GitHub OAuth (VS Code token flow)
-- Slack signature verification
-- Project admin endpoints (members + Slack mapping)
-- Git workflow actions in the IDE (Start Task, Open PR, commit linking, diff views)
+Relay is a Slack-to-IDE workflow system:
+- VS Code extension for developers
+- Hosted API + Postgres system of record
+- Dashboard for PM setup and task operations
 
 Compatibility note:
-- Relay prefers `.relay/config.json` and `.relay/users.json`.
-- Legacy `.contexthud/config.json` and `.contexthud/users.json` are still supported to avoid breakage.
+- Preferred repo config: `.relay/config.json`
+- Legacy configs still supported: `.contexthud/config.json`, `.contexthud/users.json`
 
-## Environment
+## 1) API Server Setup
 
-Create `.env`:
+Create `.env` from `.env.example`.
 
-```env
-PORT=8787
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/contexthud
-APP_BASE_URL=http://localhost:8787
-GITHUB_CLIENT_ID=
-GITHUB_CLIENT_SECRET=
-SESSION_SECRET=
-SLACK_SIGNING_SECRET=
-SLACK_BOT_TOKEN=
-ADMIN_API_KEY=
-```
+Required for API:
+- `DATABASE_URL`
+- `APP_BASE_URL`
+- `GITHUB_CLIENT_ID`
+- `GITHUB_CLIENT_SECRET`
+- `SESSION_SECRET`
+- `SLACK_SIGNING_SECRET`
+- `SLACK_BOT_TOKEN`
+- `ADMIN_API_KEY`
 
-## Run
+Optional:
+- `ADMIN_GITHUB_LOGINS` (comma-separated GitHub logins with platform admin rights)
+
+Run:
 
 ```bash
 npm install
 npm run db:migrate
 npm run server:start
+```
+
+Health:
+
+```bash
+curl -i http://localhost:8787/health/live
+curl -i http://localhost:8787/health
+```
+
+## 2) VS Code Extension Setup
+
+Build and run:
+
+```bash
 npm run build
 ```
 
-In VS Code, press `F5` to open Extension Development Host.
+Press `F5` in VS Code to launch Extension Development Host.
 
-## Per-Repo Relay Config
-
-In Extension Host command palette run:
-
+Initialize repo config from command palette:
 - `Relay: Initialize Project Config`
 
-It creates `.relay/config.json`:
+This creates:
 
 ```json
 {
@@ -58,147 +64,130 @@ It creates `.relay/config.json`:
 }
 ```
 
-## Admin Setup (No Dashboard)
+## 3) Dashboard Setup (Phase 4A)
 
-All admin calls require:
+Dashboard lives in `dashboard/` (Next.js App Router).
 
-- Header `x-admin-api-key: <ADMIN_API_KEY>`
-
-### 1) Create project
+Install/run:
 
 ```bash
-curl -X POST http://localhost:8787/admin/projects \
-  -H "x-admin-api-key: $ADMIN_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"name":"Relay Pilot"}'
+npm run dashboard:install
+npm run dashboard:dev
 ```
 
-### 2) Add member
+By default dashboard runs at `http://localhost:3001`.
 
-```bash
-curl -X POST http://localhost:8787/admin/projects/<projectId>/members \
-  -H "x-admin-api-key: $ADMIN_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"githubLogin":"your_github_login","role":"owner"}'
-```
+Dashboard env vars (see `dashboard/.env.example`):
+- `RELAY_API_BASE_URL` (API root, e.g. `http://localhost:8787`)
+- `NEXT_PUBLIC_API_BASE_URL` (same value; used in snippets/UI)
+- `DASHBOARD_BASE_URL` (e.g. `http://localhost:3001`)
+- `DASHBOARD_SESSION_SECRET` (required for httpOnly session cookies)
+- `ADMIN_API_KEY` (optional fallback for admin-only project creation)
 
-### 3) Map Slack user to GitHub user
+## 4) Slack Setup
 
-```bash
-curl -X POST http://localhost:8787/admin/projects/<projectId>/map/slack-user \
-  -H "x-admin-api-key: $ADMIN_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"slackUserId":"U123ABC","githubLogin":"your_github_login"}'
-```
+### Event Subscriptions URL
 
-### 4) Debug assignment state
+Use:
 
-```bash
-curl -X GET http://localhost:8787/admin/projects/<projectId>/debug-assignment \
-  -H "x-admin-api-key: $ADMIN_API_KEY"
-```
+- `POST /ingest/slack/:projectId`
 
-## Slack Endpoints
+Example:
 
-Project-scoped ingest endpoints:
+- `https://<api-host>/ingest/slack/<projectId>`
 
-- `POST /ingest/slack/:projectId` (events + generic ingest)
-- `POST /ingest/slack-nudge/:projectId` (slash-command style ingest)
-- `POST /slack/nudge?projectId=<projectId>` (backward-compatible slash command route)
+### Slash Command URL
 
-Slack signatures are verified with `SLACK_SIGNING_SECRET`.
+Use:
 
-## Auth Flow (VS Code)
+- `POST /slack/nudge?projectId=<projectId>`
 
-1. Click `Sign in with GitHub` in Relay sidebar.
-2. Complete browser OAuth.
-3. Extension polls `/auth/github/token` and stores bearer token in VS Code secrets.
-4. Relay calls project APIs with `Authorization: Bearer <token>`.
+### Required scopes/events
 
-## Project API
+Scopes:
+- `commands`
+- `chat:write`
+- `app_mentions:read`
+- `channels:history`
 
-Authenticated + project membership required:
+Recommended events:
+- `app_mention`
+- `message.channels`
 
-- `GET /projects/:projectId/tasks?assigned=me|all`
+After scope/url changes, reinstall the Slack app in the workspace.
+
+## 5) API Endpoints
+
+### Auth
+- `POST /auth/vscode/start`
+- `GET /auth/github/login`
+- `GET /auth/github/callback`
+- `GET /auth/github/token?loginId=...`
+- `GET /me`
+
+### Admin key endpoints
+- `POST /admin/projects`
+- `POST /admin/projects/:projectId/members`
+- `POST /admin/projects/:projectId/map/slack-user`
+- `GET /admin/projects/:projectId/debug-assignment`
+
+### Authenticated dashboard endpoints
+- `GET /projects`
+- `POST /projects` (platform admin required)
+- `GET /projects/:projectId/members`
+- `POST /projects/:projectId/members` (owner/admin)
+- `GET /projects/:projectId/slack/status`
+- `GET /projects/:projectId/slack/users`
+- `POST /projects/:projectId/slack/map-user` (owner/admin)
+- `GET /projects/:projectId/tasks?assigned=me|all&view=list|kanban`
+- `POST /projects/:projectId/tasks`
 - `GET /projects/:projectId/tasks/:taskId`
 - `PATCH /projects/:projectId/tasks/:taskId`
 - `POST /projects/:projectId/tasks/:taskId/commits`
 
-## Health
+### Slack ingest endpoints
+- `POST /ingest/slack/:projectId`
+- `POST /ingest/slack-nudge/:projectId`
+- `POST /slack/nudge?projectId=<projectId>`
 
-- `GET /health/live`
-- `GET /health`
+## 6) Dashboard Pages
 
-## Diagnostics
+- `/login`
+  - GitHub sign-in start + completion
+- `/projects`
+  - List projects
+  - Create project
+  - Add members by GitHub login
+  - Repo config snippet generator
+- `/projects/[projectId]/integrations/slack`
+  - Request URL display
+  - Verification status + last event
+  - Slack user mapping UI
+- `/projects/[projectId]/tasks`
+  - Task list (status + assignee)
+  - Create task
+  - Update status/assignee
 
-Run command:
+## 7) Deployment Notes (Railway)
 
-- `Relay: Run Diagnostics`
+API service:
+- Start command: `npm run railway:start`
+- Set all required API env vars listed above
 
-It reports:
+Dashboard service (separate Railway service recommended):
+- Root directory: `dashboard`
+- Build command: `npm run build`
+- Start command: `npm run start`
+- Set dashboard env vars from section 3
 
-- repo config
-- signed-in user
-- backend reachability
-- repo root + branch
-- last sync timestamp
+## 8) Manual Test Checklist
 
-## Relay Rename Checklist (Slack / GitHub / Railway)
-
-Use this when moving from ContextHUD naming to Relay naming.
-
-### Slack
-
-1. In Slack app, set slash command Request URL to:
-   - `https://<your-host>/slack/nudge?projectId=<projectId>`
-2. In Event Subscriptions, set Request URL to:
-   - `https://<your-host>/ingest/slack/<projectId>`
-3. Ensure bot scopes include at least:
-   - `commands`
-   - `chat:write`
-   - `app_mentions:read` (if using mention events)
-   - `channels:history` (if reading channel messages/events)
-4. Reinstall app to workspace after scope or endpoint changes.
-
-### GitHub OAuth App
-
-1. Set Authorization callback URL to:
-   - `https://<your-host>/auth/github/callback`
-2. Update backend env vars:
-   - `GITHUB_CLIENT_ID`
-   - `GITHUB_CLIENT_SECRET`
-   - `APP_BASE_URL=https://<your-host>`
-3. Keep `SESSION_SECRET` set (required for signed login state/session artifacts).
-
-### Railway
-
-1. Confirm service start command:
-   - `npm run railway:start`
-2. Confirm required variables exist in Railway service:
-   - `DATABASE_URL`
-   - `APP_BASE_URL`
-   - `GITHUB_CLIENT_ID`
-   - `GITHUB_CLIENT_SECRET`
-   - `SESSION_SECRET`
-   - `SLACK_SIGNING_SECRET`
-   - `SLACK_BOT_TOKEN`
-   - `ADMIN_API_KEY`
-3. Redeploy after variable changes.
-4. Verify:
-
-```bash
-curl -i https://<your-host>/health/live
-curl -i https://<your-host>/health
-```
-
-## Manual Pilot Smoke Test
-
-1. Run migrations and backend.
-2. Create project via admin endpoint.
-3. Initialize repo config (`Relay: Initialize Project Config`).
-4. Sign in with GitHub.
-5. Add yourself as project member.
-6. Map your Slack user ID to your GitHub user.
-7. Create Slack task for yourself.
-8. Verify it appears in `My Tasks`.
-9. Start task, open PR, change status, and verify Slack thread updates.
+1. Start API + run migrations.
+2. Sign into dashboard at `/login`.
+3. Create project in `/projects`.
+4. Add yourself as member/owner.
+5. Configure Slack request URLs for that `projectId`.
+6. Map Slack user to GitHub login in Slack integration page.
+7. Create task from Slack; confirm it appears in dashboard tasks.
+8. Create/update task from dashboard; confirm persisted state.
+9. Open VS Code extension, point to same API/project, verify same tasks load.

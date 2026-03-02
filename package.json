@@ -131,7 +131,11 @@
     "db:migrate": "node server/scripts/migrate.js",
     "server:start": "node server/server.js",
     "start": "node server/server.js",
-    "railway:start": "node server/server.js"
+    "railway:start": "node server/server.js",
+    "dashboard:install": "npm --prefix dashboard install",
+    "dashboard:dev": "npm --prefix dashboard run dev",
+    "dashboard:build": "npm --prefix dashboard run build",
+    "dashboard:start": "npm --prefix dashboard run start"
   },
   "dependencies": {
     "express": "^4.21.2",

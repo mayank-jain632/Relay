@@ -3,3 +3,7 @@ dist/
 server/data/
 .vscode-test/
 .env
+
+dashboard/node_modules/
+dashboard/.next/
+dashboard/.env
