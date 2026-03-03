@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { cookies } from 'next/headers';
+import type { NextResponse } from 'next/server';
 import { getDashboardSessionSecret } from './config';
 
 export interface DashboardSession {
@@ -79,6 +80,16 @@ function isSecureCookie(): boolean {
   return process.env.NODE_ENV === 'production';
 }
 
+function baseCookieOptions(maxAge: number) {
+  return {
+    httpOnly: true,
+    sameSite: 'lax' as const,
+    secure: isSecureCookie(),
+    path: '/',
+    maxAge
+  };
+}
+
 export function getSessionCookieName(): string {
   return SESSION_COOKIE;
 }
@@ -104,35 +115,17 @@ export async function setDashboardSession(token: string, user: DashboardSession[
     exp: Date.now() + SESSION_TTL_MS
   });
 
-  store.set(SESSION_COOKIE, value, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: isSecureCookie(),
-    path: '/',
-    maxAge: Math.floor(SESSION_TTL_MS / 1000)
-  });
+  store.set(SESSION_COOKIE, value, baseCookieOptions(Math.floor(SESSION_TTL_MS / 1000)));
 }
 
 export async function clearDashboardSession(): Promise<void> {
   const store = await cookies();
-  store.set(SESSION_COOKIE, '', {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: isSecureCookie(),
-    path: '/',
-    maxAge: 0
-  });
+  store.set(SESSION_COOKIE, '', baseCookieOptions(0));
 }
 
 export async function setPendingLoginId(loginId: string): Promise<void> {
   const store = await cookies();
-  store.set(LOGIN_COOKIE, loginId, {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: isSecureCookie(),
-    path: '/',
-    maxAge: 60 * 15
-  });
+  store.set(LOGIN_COOKIE, loginId, baseCookieOptions(60 * 15));
 }
 
 export async function getPendingLoginId(): Promise<string | null> {
@@ -142,24 +135,12 @@ export async function getPendingLoginId(): Promise<string | null> {
 
 export async function clearPendingLoginId(): Promise<void> {
   const store = await cookies();
-  store.set(LOGIN_COOKIE, '', {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: isSecureCookie(),
-    path: '/',
-    maxAge: 0
-  });
+  store.set(LOGIN_COOKIE, '', baseCookieOptions(0));
 }
 
 export async function setPendingLoginNext(nextPath: string): Promise<void> {
   const store = await cookies();
-  store.set(LOGIN_NEXT_COOKIE, String(nextPath || '/projects'), {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: isSecureCookie(),
-    path: '/',
-    maxAge: 60 * 15
-  });
+  store.set(LOGIN_NEXT_COOKIE, String(nextPath || '/projects'), baseCookieOptions(60 * 15));
 }
 
 export async function getPendingLoginNext(): Promise<string | null> {
@@ -169,11 +150,33 @@ export async function getPendingLoginNext(): Promise<string | null> {
 
 export async function clearPendingLoginNext(): Promise<void> {
   const store = await cookies();
-  store.set(LOGIN_NEXT_COOKIE, '', {
-    httpOnly: true,
-    sameSite: 'lax',
-    secure: isSecureCookie(),
-    path: '/',
-    maxAge: 0
+  store.set(LOGIN_NEXT_COOKIE, '', baseCookieOptions(0));
+}
+
+export function applyPendingLoginCookies(response: NextResponse, loginId: string, nextPath: string): void {
+  response.cookies.set(LOGIN_COOKIE, String(loginId || ''), baseCookieOptions(60 * 15));
+  response.cookies.set(LOGIN_NEXT_COOKIE, String(nextPath || '/projects'), baseCookieOptions(60 * 15));
+}
+
+export function clearPendingLoginCookies(response: NextResponse): void {
+  response.cookies.set(LOGIN_COOKIE, '', baseCookieOptions(0));
+  response.cookies.set(LOGIN_NEXT_COOKIE, '', baseCookieOptions(0));
+}
+
+export function applyDashboardSessionCookie(
+  response: NextResponse,
+  token: string,
+  user: DashboardSession['user']
+): void {
+  const value = encodeSession({
+    token,
+    user,
+    exp: Date.now() + SESSION_TTL_MS
   });
+
+  response.cookies.set(SESSION_COOKIE, value, baseCookieOptions(Math.floor(SESSION_TTL_MS / 1000)));
+}
+
+export function clearDashboardSessionCookie(response: NextResponse): void {
+  response.cookies.set(SESSION_COOKIE, '', baseCookieOptions(0));
 }

@@ -1,11 +1,10 @@
 import { NextResponse } from 'next/server';
 import { relayAuthPollToken } from '@/lib/relay-api';
 import {
-  clearPendingLoginId,
-  clearPendingLoginNext,
+  applyDashboardSessionCookie,
+  clearPendingLoginCookies,
   getPendingLoginId,
-  getPendingLoginNext,
-  setDashboardSession
+  getPendingLoginNext
 } from '@/lib/session';
 
 async function sleep(ms: number): Promise<void> {
@@ -22,15 +21,15 @@ export async function GET(request: Request) {
   for (let attempt = 0; attempt < 15; attempt += 1) {
     const result = await relayAuthPollToken(loginId);
     if (result?.token && result.user) {
-      await setDashboardSession(result.token, {
+      const response = NextResponse.redirect(new URL(nextPath, request.url));
+      applyDashboardSessionCookie(response, result.token, {
         userId: String(result.user.userId || result.user.id || ''),
         login: String(result.user.login || ''),
         name: result.user.name || null,
         avatarUrl: result.user.avatarUrl || null
       });
-      await clearPendingLoginId();
-      await clearPendingLoginNext();
-      return NextResponse.redirect(new URL(nextPath, request.url));
+      clearPendingLoginCookies(response);
+      return response;
     }
 
     if (attempt < 14) {
