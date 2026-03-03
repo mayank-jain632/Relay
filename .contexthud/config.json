@@ -1,5 +1,5 @@
 {
-  "apiBaseUrl": "http://relay-production-9927.up.railway.app",
+  "apiBaseUrl": "https://relay-production-9927.up.railway.app",
   "projectId": "b4dc8d06-6b42-4cb3-a3c1-f4fa28158505",
   "baseBranch": "main"
 }
