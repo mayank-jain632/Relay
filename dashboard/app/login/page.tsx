@@ -14,7 +14,7 @@ export default async function LoginPage({
 
   const pendingLoginId = await getPendingLoginId();
   const resolvedSearchParams = await searchParams;
-  const pending = resolvedSearchParams.pending === '1';
+  const pending = resolvedSearchParams.pending === '1' || Boolean(pendingLoginId);
   const error = resolvedSearchParams.error ? String(resolvedSearchParams.error) : '';
   const nextPath = resolvedSearchParams.next ? String(resolvedSearchParams.next) : '/projects';
 
@@ -24,23 +24,21 @@ export default async function LoginPage({
         <h1 className="title" style={{ fontSize: 22 }}>Relay Dashboard</h1>
         <p className="subtitle">Sign in with GitHub to manage projects, Slack setup, and tasks.</p>
 
-        {pending ? <div className="notice">GitHub sign-in is still pending. Finish the GitHub flow tab, then click Complete sign in.</div> : null}
+        {pending ? (
+          <div className="notice">
+            Waiting for GitHub approval. After you approve in the new tab, this page signs you in automatically.
+          </div>
+        ) : null}
         {error ? <div className="error">{error}</div> : null}
 
         <div className="row">
-          <Link
-            className="button-primary"
-            href={`/auth/start?next=${encodeURIComponent(nextPath)}`}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
+          <Link className="button-primary" href={`/auth/start?next=${encodeURIComponent(nextPath)}`} target="_blank">
             Sign in with GitHub
           </Link>
-          {pendingLoginId ? <Link className="button-secondary" href="/auth/complete">Complete sign in</Link> : null}
         </div>
 
         <p className="muted" style={{ margin: 0 }}>
-          GitHub auth opens in a new tab so this page stays open.
+          Sign-in opens in a separate tab and returns here automatically when complete.
         </p>
       </section>
     </main>

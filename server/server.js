@@ -371,7 +371,40 @@ function verifySlackSignature(req) {
   return crypto.timingSafeEqual(sigBuf, digestBuf);
 }
 
-function renderAuthSuccessPage() {
+function renderAuthSuccessPage(options = {}) {
+  const autoCompleteUrl = String(options.autoCompleteUrl || '').trim();
+  const escapedAutoCompleteUrl = autoCompleteUrl
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'");
+
+  const autoScript = autoCompleteUrl
+    ? `
+    <script>
+      (function () {
+        var completeUrl = '${escapedAutoCompleteUrl}';
+
+        function finalizeCurrentTab() {
+          setTimeout(function () {
+            window.location.href = completeUrl;
+          }, 400);
+        }
+
+        try {
+          if (window.opener && !window.opener.closed) {
+            window.opener.location.href = completeUrl;
+            window.close();
+            return;
+          }
+        } catch (error) {
+          // cross-origin opener access can fail; fallback to current tab redirect
+        }
+
+        finalizeCurrentTab();
+      })();
+    </script>
+    `
+    : '';
+
   return `<!doctype html>
 <html>
   <head>
@@ -389,9 +422,11 @@ function renderAuthSuccessPage() {
       <h1>✅ Signed in to Relay</h1>
       <p>You can close this tab and return to your app.</p>
     </div>
+    ${autoScript}
   </body>
 </html>`;
 }
+
 
 async function exchangeGitHubCodeForToken(code, appBaseUrl) {
   const response = await fetch('https://github.com/login/oauth/access_token', {
@@ -883,7 +918,7 @@ function createApp() {
 
       if (oauthState.source === 'vscode' && oauthState.login_id) {
         await completeVscodeLoginAttempt(oauthState.login_id, user.userId, token);
-        return res.status(200).send(renderAuthSuccessPage());
+        return res.status(200).send(renderAuthSuccessPage({ autoCompleteUrl: `${getDashboardBaseUrl(appBaseUrl)}/auth/complete` }));
       }
 
       if (oauthState.source === 'slack_link' && oauthState.login_id) {
