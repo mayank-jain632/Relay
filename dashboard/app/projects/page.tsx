@@ -3,6 +3,7 @@ import { requireDashboardSession } from '@/lib/auth';
 import { relayGet } from '@/lib/relay-api';
 import { DashboardShell } from '@/components/DashboardShell';
 import { CopyButton } from '@/components/CopyButton';
+import { WorkspaceActionsMenu } from '@/components/WorkspaceActionsMenu';
 
 interface ProjectItem {
   id: string;
@@ -86,9 +87,14 @@ export default async function ProjectsPage({
   const inviteUrl = typeof searchParams.invite_url === 'string' ? searchParams.invite_url : '';
   const keepMenuOpen = searchParams.menu_open === '1';
   const menuProjectId = typeof searchParams.menu_project === 'string' ? searchParams.menu_project : '';
+  const extensionCopied = searchParams.extension_copied === '1';
   const setupChecklistComplete = Boolean(
-    onboarding?.workspaceCreated && onboarding?.slackConnected && onboarding?.extensionLinked
+    onboarding?.workspaceCreated && onboarding?.slackConnected && (onboarding?.extensionLinked || extensionCopied)
   );
+
+  const pairCopyRedirect = selectedProject
+    ? `/projects?project=${encodeURIComponent(selectedProject.id)}&extension_copied=1`
+    : '/projects?extension_copied=1';
 
   return (
     <DashboardShell
@@ -110,6 +116,7 @@ export default async function ProjectsPage({
       {searchParams.connected ? <div className="notice">Slack connected successfully.</div> : null}
       {searchParams.paired ? <div className="notice">Pair code generated. Use it in VS Code: Relay: Link Workspace.</div> : null}
       {searchParams.invite_created ? <div className="notice">Invite link generated.</div> : null}
+      {extensionCopied ? <div className="notice">Pair code copied. Extension setup marked complete for onboarding.</div> : null}
       {uiError ? <div className="error">{uiError}</div> : null}
       {error ? <div className="error">{error}</div> : null}
 
@@ -136,7 +143,7 @@ export default async function ProjectsPage({
             <h3 style={{ margin: 0, fontSize: 14 }}>Progress checklist</h3>
             {checklistItem('Workspace created', Boolean(onboarding?.workspaceCreated))}
             {checklistItem('Slack connected', Boolean(onboarding?.slackConnected))}
-            {checklistItem('Extension linked', Boolean(onboarding?.extensionLinked))}
+            {checklistItem('Extension linked', Boolean(onboarding?.extensionLinked || extensionCopied))}
           </div>
 
           <div className="grid two-col">
@@ -166,7 +173,7 @@ export default async function ProjectsPage({
                     <div>Pair code: <strong>{pairCode}</strong></div>
                     {pairExpires ? <div style={{ marginTop: 6 }}>Expires: {new Date(pairExpires).toLocaleString()}</div> : null}
                   </div>
-                  <CopyButton value={pairCode} />
+                  <CopyButton value={pairCode} redirectUrl={pairCopyRedirect} />
                 </div>
               ) : null}
             </div>
@@ -233,48 +240,14 @@ export default async function ProjectsPage({
                   <td>{project.role}</td>
                   <td>{new Date(project.createdAt).toLocaleString()}</td>
                   <td>
-                    <details
-                      className="workspace-actions-menu"
-                      open={keepMenuOpen && menuProjectId === project.id}
-                    >
-                      <summary className="button-secondary workspace-actions-summary">Actions</summary>
-                      <div className="workspace-actions-panel">
-                        <div className="workspace-actions-grid">
-                          <Link className="button-secondary" href={`/projects?project=${project.id}`}>Set Active</Link>
-                          <Link className="button-secondary" href={`/projects/${project.id}/tasks`}>Open Tasks</Link>
-                          <Link className="button-secondary" href={`/projects/${project.id}/integrations/slack`}>Slack Settings</Link>
-
-                          <form action={`/projects/${project.id}/integrations/slack/connect`} method="post">
-                            <button className="button-secondary" type="submit">Connect Slack</button>
-                          </form>
-                          <form action={`/projects/${project.id}/pair-codes/create`} method="post">
-                            <input type="hidden" name="menu_project" value={project.id} />
-                            <button className="button-secondary" type="submit">Generate Pair Code</button>
-                          </form>
-                          <form action={`/projects/${project.id}/invites/create`} method="post">
-                            <input type="hidden" name="menu_project" value={project.id} />
-                            <button className="button-secondary" type="submit">Generate Invite Link</button>
-                          </form>
-                        </div>
-
-                        {project.id === selectedProject?.id && pairCode ? (
-                          <div className="workspace-actions-inline">
-                            <div className="code workspace-actions-code">
-                              <div>Pair code: <strong>{pairCode}</strong></div>
-                              {pairExpires ? <div style={{ marginTop: 6 }}>Expires: {new Date(pairExpires).toLocaleString()}</div> : null}
-                            </div>
-                            <CopyButton value={pairCode} />
-                          </div>
-                        ) : null}
-
-                        {project.id === selectedProject?.id && inviteUrl ? (
-                          <div className="workspace-actions-inline">
-                            <div className="code workspace-actions-code">{inviteUrl}</div>
-                            <CopyButton value={inviteUrl} />
-                          </div>
-                        ) : null}
-                      </div>
-                    </details>
+                    <WorkspaceActionsMenu
+                      projectId={project.id}
+                      defaultOpen={keepMenuOpen && menuProjectId === project.id}
+                      pairCode={project.id === selectedProject?.id ? pairCode : ''}
+                      pairExpires={project.id === selectedProject?.id ? pairExpires : ''}
+                      inviteUrl={project.id === selectedProject?.id ? inviteUrl : ''}
+                      showGeneratedValues={project.id === selectedProject?.id}
+                    />
                   </td>
                 </tr>
               ))}

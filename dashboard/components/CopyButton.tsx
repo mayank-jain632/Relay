@@ -5,9 +5,10 @@ import { useEffect, useState } from 'react';
 interface CopyButtonProps {
   value: string;
   label?: string;
+  redirectUrl?: string;
 }
 
-export function CopyButton({ value, label = 'Copy' }: CopyButtonProps) {
+export function CopyButton({ value, label = 'Copy', redirectUrl }: CopyButtonProps) {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -31,6 +32,11 @@ export function CopyButton({ value, label = 'Copy' }: CopyButtonProps) {
         try {
           await navigator.clipboard.writeText(value);
           setCopied(true);
+          if (redirectUrl) {
+            setTimeout(() => {
+              window.location.assign(redirectUrl);
+            }, 140);
+          }
         } catch {
           setCopied(false);
         }

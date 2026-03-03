@@ -326,8 +326,8 @@ async function getOnboardingState(projectId) {
   return {
     workspaceCreated: true,
     slackConnected: Boolean(config.slack_workspace_id),
-    // Fallback heuristic: once a pair code has been generated, treat extension setup as done.
-    extensionLinked: pairStats.consumed > 0 || pairStats.total > 0,
+    
+    extensionLinked: pairStats.consumed > 0,
     firstTaskCreated: taskCount > 0,
     slackWorkspaceId: config.slack_workspace_id || null,
     defaultChannelId: config.default_channel_id || null,

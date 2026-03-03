@@ -496,6 +496,7 @@ a {
 
 .workspace-actions-menu {
   position: relative;
+  display: inline-block;
 }
 
 .workspace-actions-summary {
@@ -517,7 +518,7 @@ a {
   opacity: 0.85;
 }
 
-.workspace-actions-menu[open] .workspace-actions-summary::after {
+.workspace-actions-menu.open .workspace-actions-summary::after {
   content: '▴';
 }
 
