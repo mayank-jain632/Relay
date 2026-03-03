@@ -21,7 +21,7 @@ Required for API:
 - `SESSION_SECRET`
 - `SLACK_SIGNING_SECRET`
 - `SLACK_BOT_TOKEN`
-- `ADMIN_API_KEY`
+- `ADMIN_API_KEY` 
 
 Optional:
 - `ADMIN_GITHUB_LOGINS` (comma-separated GitHub logins with platform admin rights)
