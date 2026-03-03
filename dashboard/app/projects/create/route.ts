@@ -16,21 +16,29 @@ export async function POST(request: Request) {
   }
 
   try {
-    const adminKey = getAdminApiKey();
-    if (adminKey) {
-      await relayAdminPost('/admin/projects', adminKey, { name, ownerGithubLogin: session.user.login });
-    } else {
-      await relayPost('/projects', session.token, { name });
-    }
-
+    // Primary path: authenticated create guarantees creator is owner.
+    await relayPost('/projects', session.token, { name });
     return NextResponse.redirect(new URL('/projects?created=1', request.url));
   } catch (error) {
     const message = String(error instanceof Error ? error.message : error);
-    if (message.includes('403') && message.toLowerCase().includes('admin')) {
-      return NextResponse.redirect(new URL('/projects?error=admin_required', request.url));
+    const adminKey = getAdminApiKey();
+
+    // Backward-compatible fallback for deployments still enforcing admin-only creation.
+    if (adminKey && message.includes('403') && message.toLowerCase().includes('admin')) {
+      try {
+        await relayAdminPost('/admin/projects', adminKey, {
+          name,
+          ownerGithubLogin: session.user.login,
+          ownerUserId: session.user.userId
+        });
+        return NextResponse.redirect(new URL('/projects?created=1', request.url));
+      } catch (fallbackError) {
+        const fallbackMessage = encodeURIComponent(String(fallbackError instanceof Error ? fallbackError.message : fallbackError));
+        return NextResponse.redirect(new URL('/projects?error=' + fallbackMessage, request.url));
+      }
     }
 
     const encoded = encodeURIComponent(message);
-    return NextResponse.redirect(new URL(`/projects?error=${encoded}`, request.url));
+    return NextResponse.redirect(new URL('/projects?error=' + encoded, request.url));
   }
 }

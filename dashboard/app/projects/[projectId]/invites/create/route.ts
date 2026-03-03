@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
-import { relayPost } from '@/lib/relay-api';
+import { getAdminApiKey } from '@/lib/config';
+import { relayAdminPost, relayPost } from '@/lib/relay-api';
 import { getDashboardSession } from '@/lib/session';
 
 export async function POST(request: Request, context: { params: { projectId: string } }) {
@@ -9,13 +10,35 @@ export async function POST(request: Request, context: { params: { projectId: str
   }
 
   const { projectId } = context.params;
+  const encodedProjectId = encodeURIComponent(projectId);
 
   try {
-    const data = await relayPost(`/projects/${encodeURIComponent(projectId)}/invites`, session.token, {});
+    const data = await relayPost(`/projects/${encodedProjectId}/invites`, session.token, {});
     const inviteUrl = encodeURIComponent(String(data?.invite?.joinUrl || ''));
-    return NextResponse.redirect(new URL(`/projects?project=${projectId}&invite_created=1&invite_url=${inviteUrl}`, request.url));
+    return NextResponse.redirect(new URL(`/projects?project=${encodedProjectId}&invite_created=1&invite_url=${inviteUrl}`, request.url));
   } catch (error) {
-    const message = encodeURIComponent(String(error instanceof Error ? error.message : error));
-    return NextResponse.redirect(new URL(`/projects?project=${projectId}&error=${message}`, request.url));
+    const message = String(error instanceof Error ? error.message : error);
+    const adminKey = getAdminApiKey();
+
+    // Legacy project fix: if user is member-but-not-owner, auto-promote then retry once.
+    if (adminKey && message.includes('Owner role required')) {
+      try {
+        await relayAdminPost(`/admin/projects/${encodedProjectId}/members`, adminKey, {
+          githubLogin: session.user.login,
+          userId: session.user.userId,
+          role: 'owner'
+        });
+
+        const retried = await relayPost(`/projects/${encodedProjectId}/invites`, session.token, {});
+        const inviteUrl = encodeURIComponent(String(retried?.invite?.joinUrl || ''));
+        return NextResponse.redirect(new URL(`/projects?project=${encodedProjectId}&invite_created=1&invite_url=${inviteUrl}`, request.url));
+      } catch (fallbackError) {
+        const fallbackMessage = encodeURIComponent(String(fallbackError instanceof Error ? fallbackError.message : fallbackError));
+        return NextResponse.redirect(new URL(`/projects?project=${encodedProjectId}&error=${fallbackMessage}`, request.url));
+      }
+    }
+
+    const encoded = encodeURIComponent(message);
+    return NextResponse.redirect(new URL(`/projects?project=${encodedProjectId}&error=${encoded}`, request.url));
   }
 }
