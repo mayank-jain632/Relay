@@ -356,6 +356,7 @@ async function startLoginFlow(context: vscode.ExtensionContext, sidebar: Sidebar
 
     const deadline = Date.now() + 30_000;
     let me: RelayUser | undefined;
+    let lastPollError = "";
 
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 1500));
@@ -368,15 +369,23 @@ async function startLoginFlow(context: vscode.ExtensionContext, sidebar: Sidebar
 
         setAuthToken(polled.token);
         await context.secrets.store(SESSION_TOKEN_KEY, polled.token);
-        me = await fetchMe();
+        me = polled.user;
+        try {
+          const hydrated = await fetchMe();
+          me = hydrated || me;
+        } catch {
+          // Fallback to user from /auth/github/token if /me has transient issues.
+        }
         break;
-      } catch {
+      } catch (error) {
+        lastPollError = String(error);
         // continue polling
       }
     }
 
     if (!me) {
-      void vscode.window.showWarningMessage('GitHub sign-in timed out. Try again.');
+      const extra = lastPollError ? ` Last error: ${lastPollError}` : '';
+      void vscode.window.showWarningMessage(`GitHub sign-in timed out. Try again.${extra}`);
       return;
     }
 

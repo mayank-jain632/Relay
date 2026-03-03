@@ -23,7 +23,11 @@ function normalizeApiBaseUrl(raw: string): string {
   }
 
   if (/^https?:\/\//i.test(trimmed)) {
-    return trimmed.replace(/\/$/, '');
+    const normalized = trimmed.replace(/\/$/, '');
+    if (/^http:\/\//i.test(normalized) && /\.railway\.app($|\/)/i.test(normalized)) {
+      return normalized.replace(/^http:\/\//i, 'https://');
+    }
+    return normalized;
   }
 
   return `http://${trimmed}`.replace(/\/$/, '');
