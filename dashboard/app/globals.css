@@ -773,3 +773,29 @@ a {
     min-width: 110px;
   }
 }
+
+.task-activity {
+  border-top: 1px solid var(--border);
+  padding-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.task-activity-list {
+  display: grid;
+  gap: 8px;
+}
+
+.task-activity-item {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #1b1f28;
+  padding: 8px;
+  display: grid;
+  gap: 4px;
+}
+
+.badge-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

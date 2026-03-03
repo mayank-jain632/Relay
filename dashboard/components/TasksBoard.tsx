@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 const STATUSES = ['todo', 'in_progress', 'blocked', 'review', 'done'] as const;
 const KANBAN_COLUMNS: Array<{ key: TaskStatus; label: string }> = [
@@ -30,6 +30,21 @@ interface TaskItem {
   assignedToUserId?: string | null;
   updatedAt?: string | null;
   createdAt?: string | null;
+  source?: string | null;
+}
+
+interface TaskEvent {
+  id: string | number;
+  eventType: string;
+  summary: string;
+  createdAt?: string | null;
+  actor?: {
+    userId?: string | null;
+    label?: string | null;
+    login?: string | null;
+    name?: string | null;
+    avatarUrl?: string | null;
+  } | null;
 }
 
 interface TasksBoardProps {
@@ -68,6 +83,26 @@ function nextStatus(current: string): TaskStatus {
   return STATUSES[(index + 1) % STATUSES.length];
 }
 
+function parseErrorMessage(data: any, fallback: string): string {
+  if (data?.error) {
+    return String(data.error);
+  }
+
+  if (data?.message) {
+    return String(data.message);
+  }
+
+  return fallback;
+}
+
+function getEmptyColumnText(columnLabel: string, hasAnyShownTasks: boolean): string {
+  if (!hasAnyShownTasks) {
+    return 'No tasks yet. Drag a card here.';
+  }
+
+  return `No tasks in ${columnLabel}. Move one here when ready.`;
+}
+
 export function TasksBoard({
   projectId,
   tasks,
@@ -82,12 +117,25 @@ export function TasksBoard({
     return map;
   }, [members]);
 
+  const [boardTasks, setBoardTasks] = useState<TaskItem[]>(tasks);
   const [query, setQuery] = useState('');
   const [assigneeFilter, setAssigneeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [onlyMine, setOnlyMine] = useState(initialOnlyMine);
   const [showCreate, setShowCreate] = useState(tasks.length === 0);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [busyTaskId, setBusyTaskId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState('');
+  const [eventsByTaskId, setEventsByTaskId] = useState<Record<string, TaskEvent[]>>({});
+  const [eventsLoading, setEventsLoading] = useState(false);
+  const [eventsError, setEventsError] = useState('');
+
+  useEffect(() => {
+    setBoardTasks(tasks);
+    if (!tasks.length) {
+      setShowCreate(true);
+    }
+  }, [tasks]);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -101,7 +149,7 @@ export function TasksBoard({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
-  const getTaskOwnerLogin = (task: TaskItem): string => {
+  const getTaskOwnerLogin = useCallback((task: TaskItem): string => {
     if (task.assignee_id) {
       return String(task.assignee_id);
     }
@@ -111,13 +159,13 @@ export function TasksBoard({
     }
 
     return '';
-  };
+  }, [memberById]);
 
   const filteredTasks = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
     const normalizedMine = String(currentLogin || '').toLowerCase();
 
-    return tasks.filter((task) => {
+    return boardTasks.filter((task) => {
       const ownerLogin = getTaskOwnerLogin(task).toLowerCase();
       const haystack = `${task.title || ''} ${task.description || ''} ${ownerLogin}`.toLowerCase();
 
@@ -153,7 +201,7 @@ export function TasksBoard({
 
       return true;
     });
-  }, [query, currentLogin, tasks, statusFilter, assigneeFilter, onlyMine, memberById]);
+  }, [query, currentLogin, boardTasks, statusFilter, assigneeFilter, onlyMine, getTaskOwnerLogin]);
 
   const tasksByStatus = useMemo(() => {
     const result: Record<string, TaskItem[]> = {};
@@ -169,28 +217,126 @@ export function TasksBoard({
     return result;
   }, [filteredTasks]);
 
-  const selectedTask = selectedTaskId ? tasks.find((task) => task.id === selectedTaskId) || null : null;
+  const selectedTask = selectedTaskId ? boardTasks.find((task) => task.id === selectedTaskId) || null : null;
 
   const uniqueUnknownAssignees = useMemo(() => {
     const known = new Set(members.map((member) => member.login.toLowerCase()));
     const unknown = new Set<string>();
-    tasks.forEach((task) => {
+    boardTasks.forEach((task) => {
       const owner = String(task.assignee_id || '').trim();
       if (owner && !known.has(owner.toLowerCase())) {
         unknown.add(owner);
       }
     });
     return Array.from(unknown).sort((a, b) => a.localeCompare(b));
-  }, [members, tasks]);
+  }, [members, boardTasks]);
 
   const totalShown = filteredTasks.length;
 
+  const fetchTaskEvents = useCallback(async (taskId: string) => {
+    setEventsLoading(true);
+    setEventsError('');
+    try {
+      const response = await fetch(`/projects/${projectId}/tasks/${taskId}/events`, {
+        method: 'GET',
+        cache: 'no-store'
+      });
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok || !data?.ok) {
+        throw new Error(parseErrorMessage(data, 'Failed to load task activity'));
+      }
+
+      setEventsByTaskId((previous) => ({
+        ...previous,
+        [taskId]: Array.isArray(data.events) ? data.events : []
+      }));
+    } catch (error) {
+      setEventsError(String(error instanceof Error ? error.message : error));
+    } finally {
+      setEventsLoading(false);
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!selectedTaskId) {
+      return;
+    }
+
+    void fetchTaskEvents(selectedTaskId);
+  }, [selectedTaskId, fetchTaskEvents]);
+
+  const updateTaskOptimistic = useCallback(async (
+    taskId: string,
+    optimisticPatch: Partial<TaskItem>,
+    serverPatch: Record<string, unknown>
+  ) => {
+    const previousTask = boardTasks.find((task) => task.id === taskId);
+    if (!previousTask) {
+      return false;
+    }
+
+    setActionError('');
+    setBusyTaskId(taskId);
+
+    setBoardTasks((previous) => previous.map((task) => (
+      task.id === taskId
+        ? {
+            ...task,
+            ...optimisticPatch,
+            updatedAt: new Date().toISOString()
+          }
+        : task
+    )));
+
+    try {
+      const response = await fetch(`/projects/${projectId}/tasks/${taskId}/update`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(serverPatch)
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || !data?.ok) {
+        throw new Error(parseErrorMessage(data, 'Failed to update task'));
+      }
+
+      if (data?.task) {
+        setBoardTasks((previous) => previous.map((task) => (
+          task.id === taskId ? { ...task, ...data.task } : task
+        )));
+      }
+
+      if (data?.warning) {
+        setActionError(String(data.warning));
+      }
+
+      if (selectedTaskId === taskId) {
+        void fetchTaskEvents(taskId);
+      }
+
+      return true;
+    } catch (error) {
+      setBoardTasks((previous) => previous.map((task) => (
+        task.id === taskId ? previousTask : task
+      )));
+      setActionError(String(error instanceof Error ? error.message : error));
+      return false;
+    } finally {
+      setBusyTaskId((current) => (current === taskId ? null : current));
+    }
+  }, [boardTasks, projectId, selectedTaskId, fetchTaskEvents]);
+
+  const currentEvents = selectedTaskId ? (eventsByTaskId[selectedTaskId] || []) : [];
+
   return (
     <>
+      {actionError ? <div className="error">{actionError}</div> : null}
+
       <section className="card grid">
         <div className="row" style={{ justifyContent: 'space-between' }}>
           <h2 className="card-title" style={{ margin: 0 }}>Quick filters</h2>
-          <span className="muted">Showing {totalShown} of {tasks.length}</span>
+          <span className="muted">Showing {totalShown} of {boardTasks.length}</span>
         </div>
 
         <div className="quick-filter-row">
@@ -252,7 +398,7 @@ export function TasksBoard({
       <section className="card grid">
         <div className="row" style={{ justifyContent: 'space-between' }}>
           <h2 className="card-title" style={{ margin: 0 }}>Create task</h2>
-          {tasks.length > 0 ? (
+          {boardTasks.length > 0 ? (
             <button className="button-primary" type="button" onClick={() => setShowCreate((value) => !value)}>
               {showCreate ? 'Hide form' : '+ New task'}
             </button>
@@ -289,6 +435,7 @@ export function TasksBoard({
         <div className="kanban-board" role="list">
           {KANBAN_COLUMNS.map((column) => {
             const columnTasks = tasksByStatus[column.key] || [];
+            const emptyText = getEmptyColumnText(column.label, filteredTasks.length > 0);
 
             return (
               <section key={column.key} className="kanban-column" aria-label={column.label}>
@@ -301,6 +448,7 @@ export function TasksBoard({
                   {columnTasks.map((task) => {
                     const ownerLogin = getTaskOwnerLogin(task) || 'Unassigned';
                     const ownerInitial = ownerLogin[0] ? ownerLogin[0].toUpperCase() : '?';
+                    const isBusy = busyTaskId === task.id;
 
                     return (
                       <article
@@ -318,17 +466,23 @@ export function TasksBoard({
                       >
                         <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
                           <strong style={{ fontSize: 14, lineHeight: 1.35 }}>{task.title}</strong>
-                          <form
-                            action={`/projects/${projectId}/tasks/${task.id}/patch`}
-                            method="post"
-                            onClick={(event) => event.stopPropagation()}
-                            onKeyDown={(event) => event.stopPropagation()}
+                          <button
+                            className={`badge badge-button ${task.status}`}
+                            type="button"
+                            disabled={isBusy}
+                            title="Click to move to next status"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              const next = nextStatus(task.status);
+                              void updateTaskOptimistic(
+                                task.id,
+                                { status: next },
+                                { status: next }
+                              );
+                            }}
                           >
-                            <input type="hidden" name="status" value={nextStatus(task.status)} />
-                            <button className={`badge badge-button ${task.status}`} type="submit" title="Click to move to next status">
-                              {formatStatus(task.status)}
-                            </button>
-                          </form>
+                            {formatStatus(task.status)}
+                          </button>
                         </div>
 
                         {task.description ? (
@@ -339,21 +493,36 @@ export function TasksBoard({
 
                         <div className="task-meta-row" onClick={(event) => event.stopPropagation()}>
                           <div className="owner-chip" title={ownerLogin}>{ownerInitial}</div>
-                          <form action={`/projects/${projectId}/tasks/${task.id}/patch`} method="post">
-                            <select
-                              className="select select-compact owner-select"
-                              name="assignedToUserId"
-                              defaultValue={task.assignedToUserId || '__none__'}
-                              onChange={(event) => event.currentTarget.form?.requestSubmit()}
-                            >
-                              <option value="__none__">Unassigned</option>
-                              {members.map((member) => (
-                                <option key={member.userId} value={member.userId}>
-                                  {member.login}
-                                </option>
-                              ))}
-                            </select>
-                          </form>
+                          <select
+                            key={`${task.id}-${task.assignedToUserId || '__none__'}`}
+                            className="select select-compact owner-select"
+                            name="assignedToUserId"
+                            defaultValue={task.assignedToUserId || '__none__'}
+                            disabled={isBusy}
+                            onChange={(event) => {
+                              const selectedUserId = event.currentTarget.value;
+                              const assignedToUserId = selectedUserId === '__none__' ? null : selectedUserId;
+                              const member = assignedToUserId ? memberById.get(assignedToUserId) : null;
+
+                              void updateTaskOptimistic(
+                                task.id,
+                                {
+                                  assignedToUserId,
+                                  assignee_id: member?.login || null
+                                },
+                                {
+                                  assignedToUserId
+                                }
+                              );
+                            }}
+                          >
+                            <option value="__none__">Unassigned</option>
+                            {members.map((member) => (
+                              <option key={member.userId} value={member.userId}>
+                                {member.login}
+                              </option>
+                            ))}
+                          </select>
                           <span className="muted" style={{ marginLeft: 'auto' }}>{formatDate(task.updatedAt)}</span>
                         </div>
                       </article>
@@ -361,7 +530,7 @@ export function TasksBoard({
                   })}
 
                   {columnTasks.length === 0 ? (
-                    <div className="kanban-empty">No tasks in this column.</div>
+                    <div className="kanban-empty">{emptyText}</div>
                   ) : null}
                 </div>
               </section>
@@ -378,7 +547,44 @@ export function TasksBoard({
               <button className="button-secondary" type="button" onClick={() => setSelectedTaskId(null)}>Close</button>
             </div>
 
-            <form className="grid" action={`/projects/${projectId}/tasks/${selectedTask.id}/patch`} method="post">
+            <form
+              className="grid"
+              onSubmit={async (event) => {
+                event.preventDefault();
+                if (!selectedTask) {
+                  return;
+                }
+
+                const formData = new FormData(event.currentTarget);
+                const status = String(formData.get('status') || selectedTask.status).trim().toLowerCase();
+                const title = String(formData.get('title') || selectedTask.title).trim();
+                const description = String(formData.get('description') || selectedTask.description || '');
+                const assignedRaw = String(formData.get('assignedToUserId') || '').trim();
+                const assignedToUserId = assignedRaw === '__none__' ? null : assignedRaw;
+                const member = assignedToUserId ? memberById.get(assignedToUserId) : null;
+
+                const ok = await updateTaskOptimistic(
+                  selectedTask.id,
+                  {
+                    status,
+                    title: title || selectedTask.title,
+                    description,
+                    assignedToUserId,
+                    assignee_id: member?.login || null
+                  },
+                  {
+                    status,
+                    title: title || selectedTask.title,
+                    description,
+                    assignedToUserId
+                  }
+                );
+
+                if (ok) {
+                  setSelectedTaskId(null);
+                }
+              }}
+            >
               <input className="input" type="text" name="title" defaultValue={selectedTask.title || ''} required />
               <textarea className="textarea" name="description" defaultValue={selectedTask.description || ''} />
               <div className="row">
@@ -397,9 +603,30 @@ export function TasksBoard({
 
               <div className="row" style={{ justifyContent: 'space-between' }}>
                 <span className="muted">Last updated: {formatDate(selectedTask.updatedAt)}</span>
-                <button className="button-primary" type="submit">Save changes</button>
+                <button className="button-primary" type="submit" disabled={busyTaskId === selectedTask.id}>Save changes</button>
               </div>
             </form>
+
+            <section className="task-activity">
+              <h4 style={{ margin: 0 }}>Activity</h4>
+              {eventsLoading ? <p className="muted" style={{ margin: 0 }}>Loading activity…</p> : null}
+              {eventsError ? <div className="error">{eventsError}</div> : null}
+
+              {!eventsLoading && !eventsError && currentEvents.length === 0 ? (
+                <p className="muted" style={{ margin: 0 }}>No activity yet.</p>
+              ) : null}
+
+              <div className="task-activity-list">
+                {currentEvents.map((eventItem) => (
+                  <div key={`${eventItem.id}`} className="task-activity-item">
+                    <div>{eventItem.summary}</div>
+                    <div className="muted" style={{ fontSize: 12 }}>
+                      {(eventItem.actor?.name || eventItem.actor?.login || eventItem.actor?.label || 'System')} · {formatDate(eventItem.createdAt)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
           </aside>
         </div>
       ) : null}

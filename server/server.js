@@ -13,7 +13,9 @@ const {
   listTasks,
   nextOrderIndex,
   patchTask,
-  summarizeTask
+  summarizeTask,
+  listTaskEvents,
+  recordTaskEvent
 } = require('./lib/task-repo');
 const {
   addProjectMember,
@@ -307,6 +309,19 @@ function buildStatusMessage(task) {
   return `🔄 Relay: Status updated -> ${statusLabel}${branchPart}`;
 }
 
+async function safeRecordTaskEvent(req, event) {
+  try {
+    await recordTaskEvent(event);
+  } catch (error) {
+    log('error', 'task_event_record_failed', {
+      requestId: req?.requestId,
+      taskId: event?.taskId,
+      eventType: event?.eventType,
+      error: String(error?.message || error)
+    });
+  }
+}
+
 async function postStatusToSlack(task) {
   if (!task.slackChannelId) {
     return null;
@@ -539,6 +554,20 @@ async function ingestSlackTask(projectId, payload, appBaseUrl) {
   });
 
   await touchSlackProjectEvent(projectId, payload.team_id || null, payload.channel_id || null);
+
+  await recordTaskEvent({
+    projectId,
+    taskId: task.id,
+    actorUserId: null,
+    actorLabel: payload.user_name || payload.user_id || 'Slack',
+    eventType: 'task.created_from_slack',
+    summary: 'Updated from Slack message',
+    metadata: {
+      source: 'slack',
+      channelId: payload.channel_id || null,
+      threadTs: payload.thread_ts || null
+    }
+  });
 
   if (!mapped && isLikelySlackUserId(parsed.assigneeRef) && appBaseUrl) {
     const warning = await sendSlackAccountLink(projectId, payload.team_id || null, parsed.assigneeRef, appBaseUrl);
@@ -1509,6 +1538,16 @@ function createApp() {
         autoCloseOnMerge: Boolean(body.autoCloseOnMerge)
       });
 
+      await safeRecordTaskEvent(req, {
+        projectId: req.projectId,
+        taskId: task.id,
+        actorUserId: req.user.userId,
+        actorLabel: req.user.login,
+        eventType: 'task.created',
+        summary: `Created by @${req.user.login}`,
+        metadata: { source: 'dashboard' }
+      });
+
       return res.status(201).json({ ok: true, task });
     } catch (error) {
       return next(error);
@@ -1524,6 +1563,22 @@ function createApp() {
       }
 
       return res.json({ task });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.get('/projects/:projectId/tasks/:taskId/events', requireAuth, requireProjectMembership, async (req, res, next) => {
+    try {
+      const taskId = String(req.params.taskId || '').trim();
+      const task = await getTaskById(req.projectId, taskId);
+      if (!task) {
+        return res.status(404).json({ error: 'Task not found' });
+      }
+
+      const limit = Number(req.query.limit || 50);
+      const events = await listTaskEvents(req.projectId, taskId, limit);
+      return res.json({ ok: true, events });
     } catch (error) {
       return next(error);
     }
@@ -1602,6 +1657,54 @@ function createApp() {
         }
       }
 
+      const eventsToRecord = [];
+      if (before.status !== task.status) {
+        eventsToRecord.push({
+          eventType: 'task.status_changed',
+          summary: `Status changed to ${formatStatus(task.status)}`,
+          metadata: {
+            before: before.status,
+            after: task.status
+          }
+        });
+      }
+
+      if (before.assignedToUserId !== task.assignedToUserId || before.assignee_id !== task.assignee_id) {
+        eventsToRecord.push({
+          eventType: 'task.assigned',
+          summary: task.assignee_id ? `Assigned to @${task.assignee_id}` : 'Unassigned task',
+          metadata: {
+            beforeAssignedToUserId: before.assignedToUserId || null,
+            afterAssignedToUserId: task.assignedToUserId || null,
+            beforeAssignee: before.assignee_id || null,
+            afterAssignee: task.assignee_id || null
+          }
+        });
+      }
+
+      if (before.title !== task.title || before.description !== task.description) {
+        eventsToRecord.push({
+          eventType: 'task.updated',
+          summary: 'Task details updated',
+          metadata: {
+            titleChanged: before.title !== task.title,
+            descriptionChanged: before.description !== task.description
+          }
+        });
+      }
+
+      for (const event of eventsToRecord) {
+        await safeRecordTaskEvent(req, {
+          projectId: req.projectId,
+          taskId: task.id,
+          actorUserId: req.user.userId,
+          actorLabel: req.user.login,
+          eventType: event.eventType,
+          summary: event.summary,
+          metadata: event.metadata
+        });
+      }
+
       return res.json({ ok: true, task, warning: warning || undefined });
     } catch (error) {
       return next(error);
@@ -1626,6 +1729,19 @@ function createApp() {
       if (!task) {
         return res.status(404).json({ error: 'Task not found' });
       }
+
+      await safeRecordTaskEvent(req, {
+        projectId: req.projectId,
+        taskId: task.id,
+        actorUserId: req.user.userId,
+        actorLabel: req.user.login,
+        eventType: 'task.commit_linked',
+        summary: `Commit linked: ${String(body.sha).slice(0, 7)}`,
+        metadata: {
+          sha: String(body.sha),
+          message: String(body.message || '')
+        }
+      });
 
       return res.json({ ok: true, task });
     } catch (error) {

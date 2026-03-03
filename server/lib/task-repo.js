@@ -344,6 +344,56 @@ async function summarizeTask(projectId, taskId) {
   return patchTask(projectId, taskId, ai);
 }
 
+async function recordTaskEvent(input) {
+  await query(
+    `INSERT INTO task_events (
+       project_id, task_id, actor_user_id, actor_label, event_type, summary, metadata, created_at
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, NOW())`,
+    [
+      input.projectId,
+      input.taskId,
+      input.actorUserId || null,
+      input.actorLabel || null,
+      input.eventType || 'task.updated',
+      input.summary || 'Task updated',
+      JSON.stringify(input.metadata || {})
+    ]
+  );
+}
+
+async function listTaskEvents(projectId, taskId, limit = 50) {
+  const safeLimit = Math.max(1, Math.min(200, Number(limit) || 50));
+  const result = await query(
+    `SELECT e.id, e.project_id, e.task_id, e.actor_user_id, e.actor_label, e.event_type, e.summary, e.metadata, e.created_at,
+            u.login AS actor_login, u.name AS actor_name, u.avatar_url AS actor_avatar_url
+     FROM task_events e
+     LEFT JOIN users u ON u.id = e.actor_user_id
+     WHERE e.project_id = $1 AND e.task_id = $2
+     ORDER BY e.created_at DESC
+     LIMIT $3`,
+    [projectId, taskId, safeLimit]
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    projectId: row.project_id,
+    taskId: row.task_id,
+    eventType: row.event_type,
+    summary: row.summary,
+    metadata: safeJson(row.metadata, {}),
+    createdAt: row.created_at,
+    actor: row.actor_login || row.actor_label
+      ? {
+          userId: row.actor_user_id,
+          label: row.actor_label || row.actor_login || null,
+          login: row.actor_login || null,
+          name: row.actor_name || null,
+          avatarUrl: row.actor_avatar_url || null
+        }
+      : null
+  }));
+}
+
 module.exports = {
   addCommit,
   backfillSlackAssigneeMapping,
@@ -353,5 +403,7 @@ module.exports = {
   localAiSummarize,
   nextOrderIndex,
   patchTask,
-  summarizeTask
+  summarizeTask,
+  listTaskEvents,
+  recordTaskEvent
 };

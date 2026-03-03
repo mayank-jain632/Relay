@@ -94,6 +94,18 @@ async function runCompatibilityMigrations() {
     consumed_at TIMESTAMPTZ
   )`);
 
+  await safeQuery(`CREATE TABLE IF NOT EXISTS task_events (
+    id BIGSERIAL PRIMARY KEY,
+    project_id UUID NOT NULL,
+    task_id UUID NOT NULL,
+    actor_user_id UUID,
+    actor_label TEXT,
+    event_type TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+
   await safeQuery(`CREATE TABLE IF NOT EXISTS workspace_invites (
     token TEXT PRIMARY KEY,
     project_id UUID NOT NULL,
@@ -122,6 +134,8 @@ async function runCompatibilityMigrations() {
   await safeQuery(`CREATE INDEX IF NOT EXISTS idx_workspace_pair_codes_project ON workspace_pair_codes(project_id, consumed_at, expires_at)`);
   await safeQuery(`CREATE INDEX IF NOT EXISTS idx_workspace_invites_project ON workspace_invites(project_id, expires_at)`);
   await safeQuery(`CREATE INDEX IF NOT EXISTS idx_slack_account_links_project ON slack_account_links(project_id, expires_at)`);
+  await safeQuery(`CREATE INDEX IF NOT EXISTS idx_task_events_project_task_created ON task_events(project_id, task_id, created_at DESC)`);
+
 }
 
 async function initSchema() {

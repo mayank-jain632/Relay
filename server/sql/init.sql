@@ -79,6 +79,18 @@ CREATE TABLE IF NOT EXISTS tasks (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS task_events (
+  id BIGSERIAL PRIMARY KEY,
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  task_id UUID NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+  actor_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  actor_label TEXT,
+  event_type TEXT NOT NULL,
+  summary TEXT NOT NULL,
+  metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE IF NOT EXISTS slack_user_map (
   project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   slack_user_id TEXT NOT NULL,
