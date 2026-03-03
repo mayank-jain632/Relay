@@ -28,9 +28,20 @@ export default async function LoginPage({
         {error ? <div className="error">{error}</div> : null}
 
         <div className="row">
-          <Link className="button-primary" href={`/auth/start?next=${encodeURIComponent(nextPath)}`}>Sign in with GitHub</Link>
+          <Link
+            className="button-primary"
+            href={`/auth/start?next=${encodeURIComponent(nextPath)}`}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            Sign in with GitHub
+          </Link>
           {pendingLoginId ? <Link className="button-secondary" href="/auth/complete">Complete sign in</Link> : null}
         </div>
+
+        <p className="muted" style={{ margin: 0 }}>
+          GitHub auth opens in a new tab so this page stays open.
+        </p>
       </section>
     </main>
   );
