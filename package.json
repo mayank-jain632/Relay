@@ -144,14 +144,14 @@
   "dependencies": {
     "express": "^4.21.2",
     "uuid": "^11.1.0",
-    "pg": "^8.13.3"
+    "pg": "^8.13.3",
+    "next": "14.2.15",
+    "react": "18.3.1",
+    "react-dom": "18.3.1"
   },
   "devDependencies": {
     "@types/node": "^22.13.8",
     "@types/vscode": "^1.90.0",
-    "typescript": "^5.7.3",
-    "next": "14.2.15",
-    "react": "18.3.1",
-    "react-dom": "18.3.1"
+    "typescript": "^5.7.3"
   }
 }
