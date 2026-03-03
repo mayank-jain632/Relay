@@ -177,3 +177,4 @@ Dashboard service (separate Railway service recommended):
 7. Create task from Slack; confirm it appears in dashboard tasks.
 8. Create/update task from dashboard; confirm persisted state.
 9. Open VS Code extension, point to same API/project, verify same tasks load.
+ 
