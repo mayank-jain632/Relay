@@ -1,10 +1,16 @@
 export function getApiBaseUrl(): string {
-  const raw =
-    process.env.RELAY_API_BASE_URL ||
-    process.env.NEXT_PUBLIC_API_BASE_URL ||
-    'http://localhost:8787';
+  const configured = process.env.RELAY_API_BASE_URL || process.env.NEXT_PUBLIC_API_BASE_URL || '';
+  const normalized = String(configured).trim().replace(/\/$/, '');
 
-  return String(raw).trim().replace(/\/$/, '');
+  if (normalized) {
+    return normalized;
+  }
+
+  if (process.env.VERCEL) {
+    throw new Error('RELAY_API_BASE_URL (or NEXT_PUBLIC_API_BASE_URL) is required in Vercel environment.');
+  }
+
+  return 'http://localhost:8787';
 }
 
 export function getDashboardSessionSecret(): string {

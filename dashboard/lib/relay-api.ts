@@ -22,12 +22,20 @@ async function relayFetch(pathname: string, options: RelayRequestOptions = {}): 
     headers['Content-Type'] = 'application/json';
   }
 
-  return fetch(`${getApiBaseUrl()}${pathname}`, {
-    method: options.method || 'GET',
-    headers,
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
-    cache: 'no-store'
-  });
+  const apiBase = getApiBaseUrl();
+  const url = `${apiBase}${pathname}`;
+
+  try {
+    return await fetch(url, {
+      method: options.method || 'GET',
+      headers,
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+      cache: 'no-store'
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    throw new Error(`Relay API request failed for ${url}. ${detail}`);
+  }
 }
 
 async function parseJsonSafe(response: Response): Promise<any> {
