@@ -11,11 +11,13 @@ export async function POST(request: Request, context: { params: { projectId: str
 
   const { projectId } = context.params;
   const encodedProjectId = encodeURIComponent(projectId);
+  const formData = await request.formData().catch(() => null);
+  const menuProject = encodeURIComponent(String(formData?.get('menu_project') || projectId));
 
   try {
     const data = await relayPost(`/projects/${encodedProjectId}/invites`, session.token, {});
     const inviteUrl = encodeURIComponent(String(data?.invite?.joinUrl || ''));
-    return NextResponse.redirect(new URL(`/projects?project=${encodedProjectId}&invite_created=1&invite_url=${inviteUrl}`, request.url));
+    return NextResponse.redirect(new URL(`/projects?project=${encodedProjectId}&invite_created=1&invite_url=${inviteUrl}&menu_open=1&menu_project=${menuProject}`, request.url));
   } catch (error) {
     const message = String(error instanceof Error ? error.message : error);
     const adminKey = getAdminApiKey();
@@ -31,14 +33,14 @@ export async function POST(request: Request, context: { params: { projectId: str
 
         const retried = await relayPost(`/projects/${encodedProjectId}/invites`, session.token, {});
         const inviteUrl = encodeURIComponent(String(retried?.invite?.joinUrl || ''));
-        return NextResponse.redirect(new URL(`/projects?project=${encodedProjectId}&invite_created=1&invite_url=${inviteUrl}`, request.url));
+        return NextResponse.redirect(new URL(`/projects?project=${encodedProjectId}&invite_created=1&invite_url=${inviteUrl}&menu_open=1&menu_project=${menuProject}`, request.url));
       } catch (fallbackError) {
         const fallbackMessage = encodeURIComponent(String(fallbackError instanceof Error ? fallbackError.message : fallbackError));
-        return NextResponse.redirect(new URL(`/projects?project=${encodedProjectId}&error=${fallbackMessage}`, request.url));
+        return NextResponse.redirect(new URL(`/projects?project=${encodedProjectId}&error=${fallbackMessage}&menu_open=1&menu_project=${menuProject}`, request.url));
       }
     }
 
     const encoded = encodeURIComponent(message);
-    return NextResponse.redirect(new URL(`/projects?project=${encodedProjectId}&error=${encoded}`, request.url));
+    return NextResponse.redirect(new URL(`/projects?project=${encodedProjectId}&error=${encoded}&menu_open=1&menu_project=${menuProject}`, request.url));
   }
 }

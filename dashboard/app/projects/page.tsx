@@ -84,6 +84,8 @@ export default async function ProjectsPage({
   const pairCode = typeof searchParams.pair_code === 'string' ? searchParams.pair_code : '';
   const pairExpires = typeof searchParams.pair_expires === 'string' ? searchParams.pair_expires : '';
   const inviteUrl = typeof searchParams.invite_url === 'string' ? searchParams.invite_url : '';
+  const keepMenuOpen = searchParams.menu_open === '1';
+  const menuProjectId = typeof searchParams.menu_project === 'string' ? searchParams.menu_project : '';
   const setupChecklistComplete = Boolean(
     onboarding?.workspaceCreated && onboarding?.slackConnected && onboarding?.extensionLinked
   );
@@ -226,12 +228,15 @@ export default async function ProjectsPage({
             </thead>
             <tbody>
               {projects.map((project) => (
-                <tr key={project.id}>
+                <tr key={project.id} className={project.id === selectedProject?.id ? 'workspace-row-active' : undefined}>
                   <td>{project.name}</td>
                   <td>{project.role}</td>
                   <td>{new Date(project.createdAt).toLocaleString()}</td>
                   <td>
-                    <details className="workspace-actions-menu">
+                    <details
+                      className="workspace-actions-menu"
+                      open={keepMenuOpen && menuProjectId === project.id}
+                    >
                       <summary className="button-secondary workspace-actions-summary">Actions</summary>
                       <div className="workspace-actions-panel">
                         <div className="workspace-actions-grid">
@@ -243,9 +248,11 @@ export default async function ProjectsPage({
                             <button className="button-secondary" type="submit">Connect Slack</button>
                           </form>
                           <form action={`/projects/${project.id}/pair-codes/create`} method="post">
+                            <input type="hidden" name="menu_project" value={project.id} />
                             <button className="button-secondary" type="submit">Generate Pair Code</button>
                           </form>
                           <form action={`/projects/${project.id}/invites/create`} method="post">
+                            <input type="hidden" name="menu_project" value={project.id} />
                             <button className="button-secondary" type="submit">Generate Invite Link</button>
                           </form>
                         </div>

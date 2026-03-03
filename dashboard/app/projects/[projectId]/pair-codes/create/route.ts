@@ -9,14 +9,16 @@ export async function POST(request: Request, context: { params: { projectId: str
   }
 
   const { projectId } = context.params;
+  const formData = await request.formData().catch(() => null);
+  const menuProject = encodeURIComponent(String(formData?.get('menu_project') || projectId));
 
   try {
     const data = await relayPost(`/projects/${encodeURIComponent(projectId)}/pair-codes`, session.token, {});
     const pairCode = encodeURIComponent(String(data?.pairCode?.code || ''));
     const pairExpires = encodeURIComponent(String(data?.pairCode?.expiresAt || ''));
-    return NextResponse.redirect(new URL(`/projects?project=${projectId}&paired=1&pair_code=${pairCode}&pair_expires=${pairExpires}`, request.url));
+    return NextResponse.redirect(new URL(`/projects?project=${projectId}&paired=1&pair_code=${pairCode}&pair_expires=${pairExpires}&menu_open=1&menu_project=${menuProject}`, request.url));
   } catch (error) {
     const message = encodeURIComponent(String(error instanceof Error ? error.message : error));
-    return NextResponse.redirect(new URL(`/projects?project=${projectId}&error=${message}`, request.url));
+    return NextResponse.redirect(new URL(`/projects?project=${projectId}&error=${message}&menu_open=1&menu_project=${menuProject}`, request.url));
   }
 }

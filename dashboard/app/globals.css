@@ -564,3 +564,11 @@ a {
   margin: 0;
   flex: 1;
 }
+
+.workspace-row-active td {
+  background: #1b202c;
+}
+
+.workspace-row-active td:first-child {
+  border-left: 2px solid var(--primary);
+}
