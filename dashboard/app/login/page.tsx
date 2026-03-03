@@ -26,20 +26,16 @@ export default async function LoginPage({
 
         {pending ? (
           <div className="notice">
-            Waiting for GitHub approval. After you approve in the new tab, this page signs you in automatically.
+            Finishing sign-in. You will be redirected automatically.
           </div>
         ) : null}
         {error ? <div className="error">{error}</div> : null}
 
         <div className="row">
-          <Link className="button-primary" href={`/auth/start?next=${encodeURIComponent(nextPath)}`} target="_blank">
+          <Link className="button-primary" href={`/auth/start?next=${encodeURIComponent(nextPath)}`}>
             Sign in with GitHub
           </Link>
         </div>
-
-        <p className="muted" style={{ margin: 0 }}>
-          Sign-in opens in a separate tab and returns here automatically when complete.
-        </p>
       </section>
     </main>
   );

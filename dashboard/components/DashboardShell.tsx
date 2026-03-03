@@ -113,7 +113,9 @@ export function DashboardShell({
             <div className="user-name">{sessionName || sessionLogin}</div>
             <div className="user-login">@{sessionLogin}</div>
           </div>
-          <Link className="button-secondary" href="/logout">Logout</Link>
+          <form action="/logout" method="post">
+            <button className="button-secondary" type="submit">Logout</button>
+          </form>
         </div>
       </aside>
 
