@@ -84,6 +84,9 @@ export default async function ProjectsPage({
   const pairCode = typeof searchParams.pair_code === 'string' ? searchParams.pair_code : '';
   const pairExpires = typeof searchParams.pair_expires === 'string' ? searchParams.pair_expires : '';
   const inviteUrl = typeof searchParams.invite_url === 'string' ? searchParams.invite_url : '';
+  const setupChecklistComplete = Boolean(
+    onboarding?.workspaceCreated && onboarding?.slackConnected && onboarding?.extensionLinked
+  );
 
   return (
     <DashboardShell
@@ -117,7 +120,7 @@ export default async function ProjectsPage({
         </form>
       </section>
 
-      {selectedProject ? (
+      {selectedProject && !setupChecklistComplete ? (
         <section className="card grid">
           <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div>
@@ -188,6 +191,18 @@ export default async function ProjectsPage({
             <span className="muted">Tasks: {onboarding?.taskCount ?? 0}</span>
           </div>
         </section>
+      ) : selectedProject ? (
+        <section className="card">
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <div>
+              <h2 className="card-title" style={{ marginBottom: 4 }}>{selectedProject.name}</h2>
+              <p className="subtitle" style={{ margin: 0 }}>
+                Setup complete. Use workspace actions in the table below for sharing and setup utilities.
+              </p>
+            </div>
+            <Link className="button-secondary" href={`/projects/${selectedProject.id}/tasks`}>Open Tasks</Link>
+          </div>
+        </section>
       ) : (
         <section className="card">
           <p className="muted" style={{ margin: 0 }}>No workspaces yet. Start with Step 1 above.</p>
@@ -197,6 +212,9 @@ export default async function ProjectsPage({
       {projects.length > 0 ? (
         <section className="card grid">
           <h2 className="card-title">All workspaces</h2>
+          <p className="muted" style={{ margin: 0 }}>
+            Open the actions menu for any workspace to connect Slack, generate pair codes, invite teammates, and open project pages.
+          </p>
           <table className="table">
             <thead>
               <tr>
@@ -213,10 +231,43 @@ export default async function ProjectsPage({
                   <td>{project.role}</td>
                   <td>{new Date(project.createdAt).toLocaleString()}</td>
                   <td>
-                    <div className="row">
-                      <Link className="button-secondary" href={`/projects?project=${project.id}`}>Open</Link>
-                      <Link className="button-secondary" href={`/projects/${project.id}/tasks`}>Tasks</Link>
-                    </div>
+                    <details className="workspace-actions-menu">
+                      <summary className="button-secondary workspace-actions-summary">Actions</summary>
+                      <div className="workspace-actions-panel">
+                        <div className="workspace-actions-grid">
+                          <Link className="button-secondary" href={`/projects?project=${project.id}`}>Set Active</Link>
+                          <Link className="button-secondary" href={`/projects/${project.id}/tasks`}>Open Tasks</Link>
+                          <Link className="button-secondary" href={`/projects/${project.id}/integrations/slack`}>Slack Settings</Link>
+
+                          <form action={`/projects/${project.id}/integrations/slack/connect`} method="post">
+                            <button className="button-secondary" type="submit">Connect Slack</button>
+                          </form>
+                          <form action={`/projects/${project.id}/pair-codes/create`} method="post">
+                            <button className="button-secondary" type="submit">Generate Pair Code</button>
+                          </form>
+                          <form action={`/projects/${project.id}/invites/create`} method="post">
+                            <button className="button-secondary" type="submit">Generate Invite Link</button>
+                          </form>
+                        </div>
+
+                        {project.id === selectedProject?.id && pairCode ? (
+                          <div className="workspace-actions-inline">
+                            <div className="code workspace-actions-code">
+                              <div>Pair code: <strong>{pairCode}</strong></div>
+                              {pairExpires ? <div style={{ marginTop: 6 }}>Expires: {new Date(pairExpires).toLocaleString()}</div> : null}
+                            </div>
+                            <CopyButton value={pairCode} />
+                          </div>
+                        ) : null}
+
+                        {project.id === selectedProject?.id && inviteUrl ? (
+                          <div className="workspace-actions-inline">
+                            <div className="code workspace-actions-code">{inviteUrl}</div>
+                            <CopyButton value={inviteUrl} />
+                          </div>
+                        ) : null}
+                      </div>
+                    </details>
                   </td>
                 </tr>
               ))}

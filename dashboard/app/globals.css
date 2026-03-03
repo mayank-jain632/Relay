@@ -493,3 +493,74 @@ a {
   line-height: 1.35;
   word-break: break-word;
 }
+
+.workspace-actions-menu {
+  position: relative;
+}
+
+.workspace-actions-summary {
+  list-style: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 88px;
+  justify-content: center;
+}
+
+.workspace-actions-summary::-webkit-details-marker {
+  display: none;
+}
+
+.workspace-actions-summary::after {
+  content: '▾';
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+.workspace-actions-menu[open] .workspace-actions-summary::after {
+  content: '▴';
+}
+
+.workspace-actions-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  min-width: 280px;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: #191c22;
+  padding: 10px;
+  display: grid;
+  gap: 10px;
+  z-index: 10;
+  box-shadow: var(--shadow-soft);
+}
+
+.workspace-actions-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.workspace-actions-grid .button-secondary {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.workspace-actions-grid form {
+  margin: 0;
+}
+
+.workspace-actions-grid form .button-secondary {
+  width: 100%;
+}
+
+.workspace-actions-inline {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.workspace-actions-code {
+  margin: 0;
+  flex: 1;
+}
