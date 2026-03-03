@@ -27,7 +27,22 @@ CREATE TABLE IF NOT EXISTS slack_project_config (
   project_id UUID PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
   slack_workspace_id TEXT,
   default_channel_id TEXT,
+  last_event_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS slack_installations (
+  slack_workspace_id TEXT PRIMARY KEY,
+  enterprise_id TEXT,
+  team_name TEXT,
+  app_id TEXT,
+  access_token TEXT,
+  bot_token TEXT,
+  bot_user_id TEXT,
+  project_id UUID REFERENCES projects(id) ON DELETE SET NULL,
+  installed_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  installed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -71,6 +86,34 @@ CREATE TABLE IF NOT EXISTS slack_user_map (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   PRIMARY KEY(project_id, slack_user_id)
+);
+
+CREATE TABLE IF NOT EXISTS slack_account_links (
+  token TEXT PRIMARY KEY,
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  slack_user_id TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS workspace_pair_codes (
+  code TEXT PRIMARY KEY,
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  consumed_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  consumed_at TIMESTAMPTZ
+);
+
+CREATE TABLE IF NOT EXISTS workspace_invites (
+  token TEXT PRIMARY KEY,
+  project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  created_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  revoked_at TIMESTAMPTZ
 );
 
 CREATE TABLE IF NOT EXISTS oauth_states (

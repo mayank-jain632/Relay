@@ -1,6 +1,12 @@
 import { NextResponse } from 'next/server';
 import { relayAuthPollToken } from '@/lib/relay-api';
-import { clearPendingLoginId, getPendingLoginId, setDashboardSession } from '@/lib/session';
+import {
+  clearPendingLoginId,
+  clearPendingLoginNext,
+  getPendingLoginId,
+  getPendingLoginNext,
+  setDashboardSession
+} from '@/lib/session';
 
 async function sleep(ms: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
@@ -8,6 +14,7 @@ async function sleep(ms: number): Promise<void> {
 
 export async function GET(request: Request) {
   const loginId = await getPendingLoginId();
+  const nextPath = (await getPendingLoginNext()) || '/projects';
   if (!loginId) {
     return NextResponse.redirect(new URL('/login', request.url));
   }
@@ -22,7 +29,8 @@ export async function GET(request: Request) {
         avatarUrl: result.user.avatarUrl || null
       });
       await clearPendingLoginId();
-      return NextResponse.redirect(new URL('/projects', request.url));
+      await clearPendingLoginNext();
+      return NextResponse.redirect(new URL(nextPath, request.url));
     }
 
     if (attempt < 14) {
@@ -30,5 +38,5 @@ export async function GET(request: Request) {
     }
   }
 
-  return NextResponse.redirect(new URL('/login?pending=1', request.url));
+  return NextResponse.redirect(new URL(`/login?pending=1&next=${encodeURIComponent(nextPath)}`, request.url));
 }

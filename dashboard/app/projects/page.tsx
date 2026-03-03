@@ -1,6 +1,5 @@
 import Link from 'next/link';
 import { requireDashboardSession } from '@/lib/auth';
-import { getAdminApiKey, getApiBaseUrl } from '@/lib/config';
 import { relayGet } from '@/lib/relay-api';
 import { DashboardShell } from '@/components/DashboardShell';
 
@@ -11,16 +10,16 @@ interface ProjectItem {
   createdAt: string;
 }
 
-function configSnippet(apiBaseUrl: string, projectId: string): string {
-  return JSON.stringify(
-    {
-      apiBaseUrl,
-      projectId,
-      baseBranch: 'main'
-    },
-    null,
-    2
-  );
+interface OnboardingState {
+  workspaceCreated: boolean;
+  slackConnected: boolean;
+  extensionLinked: boolean;
+  firstTaskCreated: boolean;
+  slackWorkspaceId?: string | null;
+  lastSlackEventAt?: string | null;
+  pairCodesGenerated?: number;
+  pairCodesConsumed?: number;
+  taskCount?: number;
 }
 
 function renderError(errorParam: string | string[] | undefined): string {
@@ -34,10 +33,19 @@ function renderError(errorParam: string | string[] | undefined): string {
   }
 
   if (raw === 'admin_required') {
-    return 'Project creation is restricted. Ask an admin to set DASHBOARD_ADMIN_API_KEY in dashboard/.env and restart the dashboard.';
+    return 'Project creation is restricted. Ask your Relay admin to set DASHBOARD_ADMIN_API_KEY in dashboard/.env and restart.';
   }
 
   return String(raw);
+}
+
+function checklistItem(label: string, done: boolean) {
+  return (
+    <div className="row" style={{ justifyContent: 'space-between', borderBottom: '1px solid var(--border)', paddingBottom: 8 }}>
+      <span>{label}</span>
+      <span className={done ? 'badge done' : 'badge todo'}>{done ? 'Done' : 'Pending'}</span>
+    </div>
+  );
 }
 
 export default async function ProjectsPage({
@@ -48,6 +56,7 @@ export default async function ProjectsPage({
   const session = await requireDashboardSession();
 
   let projects: ProjectItem[] = [];
+  let onboarding: OnboardingState | null = null;
   let error = '';
 
   try {
@@ -57,18 +66,28 @@ export default async function ProjectsPage({
     error = String(err instanceof Error ? err.message : err);
   }
 
-  const apiBaseUrl = getApiBaseUrl();
-  const hasAdminKey = Boolean(getAdminApiKey());
-
   const projectParam = typeof searchParams.project === 'string' ? searchParams.project : '';
   const selectedProject = projects.find((project) => project.id === projectParam) ?? projects[0];
   const navProjectId = selectedProject?.id;
   const uiError = renderError(searchParams.error);
 
+  if (navProjectId) {
+    try {
+      const stateData = await relayGet(`/projects/${encodeURIComponent(navProjectId)}/onboarding`, session.token);
+      onboarding = stateData?.onboarding || null;
+    } catch {
+      onboarding = null;
+    }
+  }
+
+  const pairCode = typeof searchParams.pair_code === 'string' ? searchParams.pair_code : '';
+  const pairExpires = typeof searchParams.pair_expires === 'string' ? searchParams.pair_expires : '';
+  const inviteUrl = typeof searchParams.invite_url === 'string' ? searchParams.invite_url : '';
+
   return (
     <DashboardShell
-      title="Team Setup"
-      subtitle="Create a workspace, connect Slack, and start assigning work in three steps."
+      title="Workspace Onboarding"
+      subtitle="Set up Relay in minutes: connect Slack, pair the extension, and start tracking work."
       activeNav="projects"
       projectId={navProjectId}
       activeProjectName={selectedProject?.name}
@@ -76,80 +95,125 @@ export default async function ProjectsPage({
       sessionName={session.user.name}
       actions={navProjectId ? (
         <>
-          <Link className="button-secondary" href={`/projects/${navProjectId}/integrations/slack`}>Step 2: Connect Slack</Link>
-          <Link className="button-secondary" href={`/projects/${navProjectId}/tasks`}>Step 3: Manage Tasks</Link>
+          <Link className="button-secondary" href={`/projects/${navProjectId}/integrations/slack`}>Slack</Link>
+          <Link className="button-secondary" href={`/projects/${navProjectId}/tasks`}>Tasks</Link>
         </>
       ) : null}
     >
-      {searchParams.created ? <div className="notice">Workspace created. Next, connect Slack.</div> : null}
-      {searchParams.member_added ? <div className="notice">Teammate added.</div> : null}
+      {searchParams.created ? <div className="notice">Workspace created. Continue with Connect Slack.</div> : null}
+      {searchParams.connected ? <div className="notice">Slack connected successfully.</div> : null}
+      {searchParams.paired ? <div className="notice">Pair code generated. Use it in VS Code: Relay: Link Workspace.</div> : null}
+      {searchParams.invite_created ? <div className="notice">Invite link generated.</div> : null}
       {uiError ? <div className="error">{uiError}</div> : null}
       {error ? <div className="error">{error}</div> : null}
 
-      {!hasAdminKey ? (
-        <section className="notice">
-          <strong>Setup note:</strong> If your API requires admin approval for creating workspaces, add
-          {' '}<code>DASHBOARD_ADMIN_API_KEY</code>{' '}in <code>dashboard/.env</code>.
-        </section>
-      ) : null}
-
       <section className="card grid">
-        <h2 className="card-title">How this works</h2>
-        <ol className="muted" style={{ margin: 0, paddingLeft: 18, display: 'grid', gap: 6 }}>
-          <li>Create a workspace for your team.</li>
-          <li>Connect Slack and map teammates.</li>
-          <li>Create tasks and assign owners.</li>
-        </ol>
-      </section>
-
-      <section className="card grid">
-        <h2 className="card-title">Step 1: Create a workspace</h2>
-        <p className="muted" style={{ margin: 0 }}>Use a simple team name like “Relay Product Team”.</p>
+        <h2 className="card-title">1. Create workspace</h2>
+        <p className="muted" style={{ margin: 0 }}>Pick a simple team name. Example: Product Engineering.</p>
         <form action="/projects/create" method="post" className="row">
-          <input className="input" type="text" name="name" placeholder="Relay Product Team" required style={{ minWidth: 320 }} />
+          <input className="input" type="text" name="name" placeholder="Product Engineering" required style={{ minWidth: 320 }} />
           <button className="button-primary" type="submit">Create Workspace</button>
         </form>
       </section>
 
-      {projects.map((project) => (
-        <section className="card grid" key={project.id}>
-          <div className="header" style={{ marginBottom: 0 }}>
+      {selectedProject ? (
+        <section className="card grid">
+          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
             <div>
-              <h3 style={{ margin: 0, fontSize: 17 }}>{project.name}</h3>
-              <p className="subtitle">Role: {project.role}</p>
+              <h2 className="card-title" style={{ marginBottom: 4 }}>{selectedProject.name}</h2>
+              <p className="subtitle" style={{ margin: 0 }}>Role: {selectedProject.role}</p>
             </div>
-            <div className="row">
-              <Link className="button-secondary" href={`/projects?project=${project.id}`}>Set as Active</Link>
-              <Link className="button-secondary" href={`/projects/${project.id}/integrations/slack`}>Step 2: Slack</Link>
-              <Link className="button-secondary" href={`/projects/${project.id}/tasks`}>Step 3: Tasks</Link>
-            </div>
+            <Link className="button-secondary" href={`/projects?project=${selectedProject.id}`}>Set Active</Link>
+          </div>
+
+          <div className="grid" style={{ gap: 8 }}>
+            <h3 style={{ margin: 0, fontSize: 14 }}>Progress checklist</h3>
+            {checklistItem('Workspace created', Boolean(onboarding?.workspaceCreated))}
+            {checklistItem('Slack connected', Boolean(onboarding?.slackConnected))}
+            {checklistItem('Extension linked', Boolean(onboarding?.extensionLinked))}
+            {checklistItem('First task created', Boolean(onboarding?.firstTaskCreated))}
           </div>
 
           <div className="grid two-col">
-            <div>
-              <h4 style={{ margin: '0 0 6px', fontSize: 14 }}>Invite teammate</h4>
-              <p className="muted" style={{ margin: '0 0 8px' }}>Enter their GitHub username.</p>
-              <form action={`/projects/${project.id}/members/add`} method="post" className="grid" style={{ gap: 8 }}>
-                <input className="input" type="text" name="githubLogin" placeholder="github username" required />
-                <select className="select" name="role" defaultValue="member">
-                  <option value="member">Team member</option>
-                  <option value="owner">Workspace owner</option>
-                </select>
-                <button className="button-primary" type="submit">Add Teammate</button>
+            <div className="card" style={{ background: 'var(--surface-soft)' }}>
+              <h3 style={{ margin: '0 0 6px', fontSize: 14 }}>2. Connect Slack</h3>
+              <p className="muted" style={{ margin: '0 0 10px' }}>One click installs Relay app to your Slack workspace.</p>
+              <form action={`/projects/${selectedProject.id}/integrations/slack/connect`} method="post">
+                <button className="button-primary" type="submit">Connect Slack</button>
               </form>
+              <p className="muted" style={{ margin: '10px 0 0' }}>
+                Status: {onboarding?.slackConnected ? 'Connected' : 'Not connected'}
+                {onboarding?.lastSlackEventAt ? ` · Last event ${new Date(onboarding.lastSlackEventAt).toLocaleString()}` : ''}
+              </p>
             </div>
-            <div>
-              <h4 style={{ margin: '0 0 6px', fontSize: 14 }}>Advanced setup (engineering only)</h4>
-              <p className="muted" style={{ margin: '0 0 8px' }}>Share this with a developer to link the VS Code extension.</p>
-              <pre className="code">{configSnippet(apiBaseUrl, project.id)}</pre>
+
+            <div className="card" style={{ background: 'var(--surface-soft)' }}>
+              <h3 style={{ margin: '0 0 6px', fontSize: 14 }}>3. Install extension</h3>
+              <p className="muted" style={{ margin: '0 0 10px' }}>
+                In VS Code, run <code>Relay: Link Workspace</code> and paste a pair code.
+              </p>
+              <form action={`/projects/${selectedProject.id}/pair-codes/create`} method="post" className="row">
+                <button className="button-primary" type="submit">Generate Pair Code</button>
+              </form>
+              {pairCode ? (
+                <div className="code" style={{ marginTop: 10 }}>
+                  Pair code: <strong>{pairCode}</strong>
+                  {pairExpires ? `\nExpires: ${new Date(pairExpires).toLocaleString()}` : ''}
+                </div>
+              ) : null}
             </div>
           </div>
-        </section>
-      ))}
 
-      {projects.length === 0 ? (
+          <div className="card" style={{ background: 'var(--surface-soft)' }}>
+            <h3 style={{ margin: '0 0 6px', fontSize: 14 }}>4. Invite teammates</h3>
+            <p className="muted" style={{ margin: '0 0 10px' }}>
+              Share one link. Teammates sign in with GitHub and join automatically.
+            </p>
+            <form action={`/projects/${selectedProject.id}/invites/create`} method="post" className="row">
+              <button className="button-primary" type="submit">Generate Invite Link</button>
+            </form>
+            {inviteUrl ? <div className="code" style={{ marginTop: 10 }}>{inviteUrl}</div> : null}
+          </div>
+
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <span className="muted">Active workspace ID: {selectedProject.id}</span>
+            <span className="muted">Tasks: {onboarding?.taskCount ?? 0}</span>
+          </div>
+        </section>
+      ) : (
         <section className="card">
-          <p className="muted" style={{ margin: 0 }}>No workspaces yet. Start with “Step 1: Create a workspace”.</p>
+          <p className="muted" style={{ margin: 0 }}>No workspaces yet. Start with Step 1 above.</p>
+        </section>
+      )}
+
+      {projects.length > 0 ? (
+        <section className="card grid">
+          <h2 className="card-title">All workspaces</h2>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Role</th>
+                <th>Created</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {projects.map((project) => (
+                <tr key={project.id}>
+                  <td>{project.name}</td>
+                  <td>{project.role}</td>
+                  <td>{new Date(project.createdAt).toLocaleString()}</td>
+                  <td>
+                    <div className="row">
+                      <Link className="button-secondary" href={`/projects?project=${project.id}`}>Open</Link>
+                      <Link className="button-secondary" href={`/projects/${project.id}/tasks`}>Tasks</Link>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </section>
       ) : null}
     </DashboardShell>

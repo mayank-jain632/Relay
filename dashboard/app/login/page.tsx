@@ -15,6 +15,7 @@ export default async function LoginPage({
   const pendingLoginId = await getPendingLoginId();
   const pending = searchParams.pending === '1';
   const error = searchParams.error ? String(searchParams.error) : '';
+  const nextPath = searchParams.next ? String(searchParams.next) : '/projects';
 
   return (
     <main className="page" style={{ maxWidth: 520 }}>
@@ -26,7 +27,7 @@ export default async function LoginPage({
         {error ? <div className="error">{error}</div> : null}
 
         <div className="row">
-          <Link className="button-primary" href="/auth/start">Sign in with GitHub</Link>
+          <Link className="button-primary" href={`/auth/start?next=${encodeURIComponent(nextPath)}`}>Sign in with GitHub</Link>
           {pendingLoginId ? <Link className="button-secondary" href="/auth/complete">Complete sign in</Link> : null}
         </div>
       </section>

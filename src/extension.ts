@@ -15,7 +15,8 @@ import {
   pollVscodeToken,
   setApiContext,
   setAuthToken,
-  startVscodeLogin
+  startVscodeLogin,
+  verifyPairCode
 } from './api/client';
 import {
   buildBranchName,
@@ -130,6 +131,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand('contexthud.linkWorkspace', async () => {
+      await linkWorkspaceByPairCode(sidebar);
+    })
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand('contexthud.diagnostics', async () => {
       await runDiagnostics();
     })
@@ -144,6 +151,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand('relay.initializeProjectConfig', async () => {
       await vscode.commands.executeCommand('contexthud.initializeProjectConfig');
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('relay.linkWorkspace', async () => {
+      await vscode.commands.executeCommand('contexthud.linkWorkspace');
     })
   );
 
@@ -242,6 +255,47 @@ async function loadRepoConfig(sidebar: SidebarProvider, options: { interactive: 
 
   configReady = true;
   setApiContext({ apiBaseUrl: config.apiBaseUrl, projectId: config.projectId });
+}
+
+async function linkWorkspaceByPairCode(sidebar: SidebarProvider): Promise<void> {
+  const code = await vscode.window.showInputBox({
+    title: 'Relay: Link Workspace',
+    prompt: 'Paste the pair code from Relay dashboard',
+    placeHolder: 'ABCD-1234'
+  });
+
+  if (!code) {
+    return;
+  }
+
+  const existingConfig = await readRepoConfig();
+  const apiBaseInput = await vscode.window.showInputBox({
+    title: 'Relay: API Base URL',
+    prompt: 'Confirm Relay API URL',
+    value: existingConfig?.apiBaseUrl || getRelayStringSetting('apiBaseUrl', 'http://localhost:8787'),
+    placeHolder: 'https://relay-api.yourdomain.com'
+  });
+
+  if (!apiBaseInput) {
+    return;
+  }
+
+  try {
+    const linked = await verifyPairCode(apiBaseInput, code);
+    const config = await writeRepoConfig({
+      apiBaseUrl: linked.apiBaseUrl || apiBaseInput,
+      projectId: linked.projectId,
+      baseBranch: linked.baseBranch || existingConfig?.baseBranch || 'main'
+    });
+
+    configReady = true;
+    setApiContext({ apiBaseUrl: config.apiBaseUrl, projectId: config.projectId });
+    refreshBackoffMs = 5000;
+    void vscode.window.showInformationMessage(`Relay linked to project ${config.projectId}.`);
+    await refreshTasks(sidebar, { interactive: true });
+  } catch (error) {
+    void vscode.window.showErrorMessage(`Relay link failed: ${String(error)}`);
+  }
 }
 
 function updateSidebarAuthState(sidebar: SidebarProvider): void {

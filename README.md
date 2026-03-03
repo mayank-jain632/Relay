@@ -51,18 +51,13 @@ npm run build
 
 Press `F5` in VS Code to launch Extension Development Host.
 
-Initialize repo config from command palette:
+Link workspace from command palette:
+- `Relay: Link Workspace`
+
+This uses a pair code from dashboard and writes `.relay/config.json` automatically.
+
+Manual fallback still exists:
 - `Relay: Initialize Project Config`
-
-This creates:
-
-```json
-{
-  "apiBaseUrl": "http://localhost:8787",
-  "projectId": "<project-id>",
-  "baseBranch": "main"
-}
-```
 
 ## 3) Dashboard Setup (Phase 4A)
 
@@ -85,37 +80,16 @@ Dashboard env vars (see `dashboard/.env.example`):
 - `DASHBOARD_ADMIN_API_KEY` (recommended if project creation is admin-only on API)
 - `RELAY_ADMIN_API_KEY` or `ADMIN_API_KEY` (legacy fallbacks)
 
-## 4) Slack Setup
+## 4) PM Onboarding Flow (Frictionless)
 
-### Event Subscriptions URL
+Dashboard goal flow:
+1. Create workspace
+2. Connect Slack
+3. Generate pair code for developer
+4. Developer runs `Relay: Link Workspace` in VS Code
+5. Share invite link with teammates
 
-Use:
-
-- `POST /ingest/slack/:projectId`
-
-Example:
-
-- `https://<api-host>/ingest/slack/<projectId>`
-
-### Slash Command URL
-
-Use:
-
-- `POST /slack/nudge?projectId=<projectId>`
-
-### Required scopes/events
-
-Scopes:
-- `commands`
-- `chat:write`
-- `app_mentions:read`
-- `channels:history`
-
-Recommended events:
-- `app_mention`
-- `message.channels`
-
-After scope/url changes, reinstall the Slack app in the workspace.
+No manual JSON config copy required.
 
 ## 5) API Endpoints
 
@@ -147,27 +121,38 @@ After scope/url changes, reinstall the Slack app in the workspace.
 - `POST /projects/:projectId/tasks/:taskId/commits`
 
 ### Slack ingest endpoints
+- `POST /ingest/slack` (global, preferred)
 - `POST /ingest/slack/:projectId`
 - `POST /ingest/slack-nudge/:projectId`
 - `POST /slack/nudge?projectId=<projectId>`
+
+### Onboarding endpoints
+- `POST /projects/:projectId/slack/connect`
+- `POST /projects/:projectId/pair-codes`
+- `POST /pair/verify`
+- `POST /projects/:projectId/invites`
+- `POST /invites/:token/accept`
+- `GET /projects/:projectId/onboarding`
 
 ## 6) Dashboard Pages
 
 - `/login`
   - GitHub sign-in start + completion
 - `/projects`
-  - List projects
-  - Create project
-  - Add members by GitHub login
-  - Repo config snippet generator
+  - List/create workspaces
+  - Onboarding checklist
+  - Connect Slack button
+  - Pair code generation
+  - Invite link generation
 - `/projects/[projectId]/integrations/slack`
-  - Request URL display
-  - Verification status + last event
-  - Slack user mapping UI
+  - Connection status + last event
+  - Auto-linking visibility for Slack users
 - `/projects/[projectId]/tasks`
   - Task list (status + assignee)
   - Create task
   - Update status/assignee
+- `/join/[token]`
+  - Join-by-link workspace invite flow
 
 ## 7) Deployment Notes (Railway)
 

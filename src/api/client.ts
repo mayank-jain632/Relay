@@ -6,6 +6,13 @@ export interface ApiContext {
   projectId: string;
 }
 
+export interface PairVerifyResponse {
+  ok: boolean;
+  apiBaseUrl: string;
+  projectId: string;
+  baseBranch?: string;
+}
+
 let authToken: string | undefined;
 let apiContext: ApiContext | undefined;
 
@@ -137,6 +144,30 @@ export async function fetchMe(): Promise<RelayUser> {
   }
 
   return (await response.json()) as RelayUser;
+}
+
+export async function verifyPairCode(apiBaseUrl: string, code: string): Promise<PairVerifyResponse> {
+  const response = await fetch(`${normalizeApiBaseUrl(apiBaseUrl)}/pair/verify`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ code: String(code || '').trim() })
+  });
+
+  const text = await response.text();
+  let parsed: PairVerifyResponse | any = null;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    parsed = null;
+  }
+
+  if (!response.ok || !parsed?.projectId) {
+    throw new Error(`Pair verification failed: ${response.status}${text ? ` - ${text}` : ''}`);
+  }
+
+  return parsed as PairVerifyResponse;
 }
 
 export async function fetchTaskList(params: { assigned?: 'me' | 'all' } = {}): Promise<TaskListResponse> {

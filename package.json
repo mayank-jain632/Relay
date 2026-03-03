@@ -41,6 +41,10 @@
         "title": "Relay: Initialize Project Config"
       },
       {
+        "command": "relay.linkWorkspace",
+        "title": "Relay: Link Workspace"
+      },
+      {
         "command": "relay.diagnostics",
         "title": "Relay: Run Diagnostics"
       }

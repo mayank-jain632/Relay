@@ -39,6 +39,19 @@ const {
   signAuthToken,
   verifyAuthToken
 } = require('./lib/auth-repo');
+const {
+  consumePairCode,
+  consumeSlackAccountLink,
+  createPairCode,
+  createSlackAccountLink,
+  createWorkspaceInvite,
+  getOnboardingState,
+  getSlackInstallationByWorkspaceId,
+  getWorkspaceInvite,
+  resolveProjectIdForSlack,
+  touchSlackProjectEvent,
+  upsertSlackInstallation
+} = require('./lib/onboarding-repo');
 
 const runtimeState = {
   startupInitError: null
@@ -108,6 +121,104 @@ function requireEnv(name) {
   return value;
 }
 
+function getDashboardBaseUrl(appBaseUrl) {
+  return String(process.env.DASHBOARD_BASE_URL || appBaseUrl).trim().replace(/\/$/, '');
+}
+
+function getSlackRedirectUri(appBaseUrl) {
+  return String(process.env.SLACK_REDIRECT_URI || `${appBaseUrl}/auth/slack/callback`).trim();
+}
+
+function isLikelySlackUserId(value) {
+  return /^[UW][A-Z0-9]+$/i.test(String(value || '').trim());
+}
+
+async function getSlackBotTokenForWorkspace(workspaceId) {
+  const workspace = String(workspaceId || '').trim();
+  if (workspace) {
+    const installation = await getSlackInstallationByWorkspaceId(workspace);
+    if (installation?.bot_token) {
+      return String(installation.bot_token);
+    }
+  }
+
+  const fallbackToken = String(process.env.SLACK_BOT_TOKEN || '').trim();
+  return fallbackToken || '';
+}
+
+async function postSlackMessage({ workspaceId, channelId, text, threadTs }) {
+  const token = await getSlackBotTokenForWorkspace(workspaceId);
+  if (!token || !channelId) {
+    return null;
+  }
+
+  const payload = {
+    channel: channelId,
+    text
+  };
+
+  if (threadTs) {
+    payload.thread_ts = threadTs;
+  }
+
+  try {
+    const response = await fetch('https://slack.com/api/chat.postMessage', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json; charset=utf-8'
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      return `Slack API error: ${result?.error || `HTTP ${response.status}`}`;
+    }
+
+    return null;
+  } catch (error) {
+    return `Slack API error: ${String(error?.message || error)}`;
+  }
+}
+
+async function sendSlackAccountLink(projectId, slackWorkspaceId, slackUserId, appBaseUrl) {
+  if (!projectId || !isLikelySlackUserId(slackUserId)) {
+    return null;
+  }
+
+  const token = await createSlackAccountLink(projectId, String(slackUserId).trim().toUpperCase());
+  const linkUrl = `${appBaseUrl}/auth/slack/link/${token}`;
+  const text = `Relay: link your account to auto-assign tasks. ${linkUrl}`;
+
+  return postSlackMessage({
+    workspaceId: slackWorkspaceId,
+    channelId: String(slackUserId).trim().toUpperCase(),
+    text
+  });
+}
+
+async function exchangeSlackCodeForToken(code, appBaseUrl) {
+  const params = new URLSearchParams();
+  params.set('client_id', requireEnv('SLACK_CLIENT_ID'));
+  params.set('client_secret', requireEnv('SLACK_CLIENT_SECRET'));
+  params.set('code', code);
+  params.set('redirect_uri', getSlackRedirectUri(appBaseUrl));
+
+  const response = await fetch('https://slack.com/api/oauth.v2.access', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: params.toString()
+  });
+
+  const data = await response.json();
+  if (!response.ok || !data?.ok) {
+    throw new Error(`Slack OAuth failed: ${data?.error || response.status}`);
+  }
+
+  return data;
+}
+
 function formatStatus(status) {
   return String(status || 'todo').replace('_', ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
@@ -138,39 +249,16 @@ function buildStatusMessage(task) {
 }
 
 async function postStatusToSlack(task) {
-  const token = String(process.env.SLACK_BOT_TOKEN || '').trim();
-  if (!token || !task.slackChannelId) {
+  if (!task.slackChannelId) {
     return null;
   }
 
-  const payload = {
-    channel: task.slackChannelId,
+  return postSlackMessage({
+    workspaceId: task.slackWorkspaceId,
+    channelId: task.slackChannelId,
+    threadTs: task.slackThreadTs,
     text: buildStatusMessage(task)
-  };
-
-  if (task.slackThreadTs) {
-    payload.thread_ts = task.slackThreadTs;
-  }
-
-  try {
-    const response = await fetch('https://slack.com/api/chat.postMessage', {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${token}`,
-        'Content-Type': 'application/json; charset=utf-8'
-      },
-      body: JSON.stringify(payload)
-    });
-
-    const result = await response.json();
-    if (!response.ok || !result.ok) {
-      return `Slack status update failed: ${result?.error || `HTTP ${response.status}`}`;
-    }
-
-    return null;
-  } catch (error) {
-    return `Slack status update failed: ${String(error?.message || error)}`;
-  }
+  });
 }
 
 function verifySlackSignature(req) {
@@ -358,7 +446,7 @@ function isPlatformAdmin(req) {
   return admins.has(String(req.user?.login || '').toLowerCase());
 }
 
-async function ingestSlackTask(projectId, payload) {
+async function ingestSlackTask(projectId, payload, appBaseUrl) {
   const parsed = parseSlackTaskText(payload.text || '');
 
   const mapped =
@@ -391,15 +479,18 @@ async function ingestSlackTask(projectId, payload) {
     title: parsed.title
   });
 
-  await query(
-    `INSERT INTO slack_project_config (project_id, slack_workspace_id, default_channel_id, created_at)
-     VALUES ($1, $2, $3, NOW())
-     ON CONFLICT(project_id)
-     DO UPDATE SET
-       slack_workspace_id = COALESCE(EXCLUDED.slack_workspace_id, slack_project_config.slack_workspace_id),
-       default_channel_id = COALESCE(EXCLUDED.default_channel_id, slack_project_config.default_channel_id)`,
-    [projectId, payload.team_id || null, payload.channel_id || null]
-  );
+  await touchSlackProjectEvent(projectId, payload.team_id || null, payload.channel_id || null);
+
+  if (!mapped && isLikelySlackUserId(parsed.assigneeRef) && appBaseUrl) {
+    const warning = await sendSlackAccountLink(projectId, payload.team_id || null, parsed.assigneeRef, appBaseUrl);
+    if (warning) {
+      log('error', 'slack_account_link_send_failed', {
+        projectId,
+        slackUserId: parsed.assigneeRef,
+        warning
+      });
+    }
+  }
 
   return {
     ok: true,
@@ -476,6 +567,21 @@ function createApp() {
   });
 
   const appBaseUrl = String(process.env.APP_BASE_URL || `http://localhost:${process.env.PORT || 8787}`).replace(/\/$/, '');
+
+  async function resolveProjectIdFromSlackPayload(payload, fallbackProjectId) {
+    const explicit = String(fallbackProjectId || '').trim();
+    if (explicit) {
+      return explicit;
+    }
+
+    const workspaceId = String(payload?.team_id || '').trim();
+    const channelId = String(payload?.channel_id || '').trim();
+    if (!workspaceId) {
+      return null;
+    }
+
+    return resolveProjectIdForSlack(workspaceId, channelId || null);
+  }
 
   async function requireAuth(req, res, next) {
     try {
@@ -608,6 +714,63 @@ function createApp() {
     }
   });
 
+  app.get('/auth/slack/link/:token', async (req, res) => {
+    const token = String(req.params.token || '').trim();
+    if (!token) {
+      return res.status(400).send('Invalid link token.');
+    }
+
+    const url = new URL(`${appBaseUrl}/auth/github/login`);
+    url.searchParams.set('source', 'slack_link');
+    url.searchParams.set('loginId', token);
+    return res.redirect(url.toString());
+  });
+
+  app.get('/auth/slack/callback', async (req, res, next) => {
+    try {
+      const code = String(req.query.code || '').trim();
+      const state = String(req.query.state || '').trim();
+
+      if (!code || !state) {
+        return res.status(400).send('Missing code or state.');
+      }
+
+      const oauthState = await consumeOAuthState(state);
+      if (!oauthState || oauthState.source !== 'slack_install') {
+        return res.status(400).send('Invalid or expired Slack install state.');
+      }
+
+      const [projectId, installedByUserId] = String(oauthState.login_id || '').split(':');
+      if (!projectId) {
+        return res.status(400).send('Missing project context for Slack install.');
+      }
+
+      const data = await exchangeSlackCodeForToken(code, appBaseUrl);
+      const workspaceId = String(data?.team?.id || '').trim();
+      if (!workspaceId) {
+        return res.status(400).send('Slack install did not return a workspace ID.');
+      }
+
+      await upsertSlackInstallation({
+        slackWorkspaceId: workspaceId,
+        enterpriseId: data?.enterprise?.id || null,
+        teamName: data?.team?.name || null,
+        appId: data?.app_id || null,
+        accessToken: data?.access_token || null,
+        botToken: data?.access_token || null,
+        botUserId: data?.bot_user_id || null,
+        projectId,
+        installedByUserId: installedByUserId || null
+      });
+
+      await touchSlackProjectEvent(projectId, workspaceId, null);
+      const dashboardBaseUrl = getDashboardBaseUrl(appBaseUrl);
+      return res.redirect(`${dashboardBaseUrl}/projects/${projectId}/integrations/slack?connected=1`);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   app.get('/auth/github/callback', async (req, res, next) => {
     try {
       const code = String(req.query.code || '').trim();
@@ -629,6 +792,17 @@ function createApp() {
 
       if (oauthState.source === 'vscode' && oauthState.login_id) {
         await completeVscodeLoginAttempt(oauthState.login_id, user.userId, token);
+        return res.status(200).send(renderAuthSuccessPage());
+      }
+
+      if (oauthState.source === 'slack_link' && oauthState.login_id) {
+        const link = await consumeSlackAccountLink(oauthState.login_id);
+        if (!link) {
+          return res.status(400).send('This Slack link has expired. Ask Relay bot for a new link.');
+        }
+
+        await upsertSlackUserMap(link.projectId, link.slackUserId, user);
+        await backfillSlackAssigneeMapping(link.projectId, link.slackUserId, user);
         return res.status(200).send(renderAuthSuccessPage());
       }
 
@@ -796,7 +970,7 @@ function createApp() {
     }
   });
 
-  app.post('/projects', requireAuth, requirePlatformAdmin, async (req, res, next) => {
+  app.post('/projects', requireAuth, async (req, res, next) => {
     try {
       const name = String(req.body?.name || '').trim() || 'Untitled Project';
       const project = await createProject(name);
@@ -840,21 +1014,135 @@ function createApp() {
     }
   });
 
+  app.get('/projects/:projectId/onboarding', requireAuth, requireProjectMembership, async (req, res, next) => {
+    try {
+      const onboarding = await getOnboardingState(req.projectId);
+      return res.json({ ok: true, onboarding });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post('/projects/:projectId/pair-codes', requireAuth, requireProjectMembership, async (req, res, next) => {
+    try {
+      const pairCode = await createPairCode(req.projectId, req.user.userId, 10);
+      return res.status(201).json({
+        ok: true,
+        pairCode: {
+          code: pairCode.code,
+          expiresAt: pairCode.expiresAt
+        }
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post('/pair/verify', async (req, res, next) => {
+    try {
+      const code = String(req.body?.code || '').trim();
+      if (!code) {
+        return res.status(400).json({ error: 'code is required' });
+      }
+
+      let consumedByUserId = null;
+      const token = getBearerToken(req);
+      if (token) {
+        const user = await verifyAuthToken(token);
+        if (user) {
+          consumedByUserId = user.userId;
+        }
+      }
+
+      const consumed = await consumePairCode(code, consumedByUserId);
+      if (!consumed) {
+        return res.status(400).json({ error: 'Invalid or expired pair code' });
+      }
+
+      return res.json({
+        ok: true,
+        apiBaseUrl: appBaseUrl,
+        projectId: consumed.projectId,
+        baseBranch: 'main'
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post('/projects/:projectId/invites', requireAuth, requireProjectMembership, requireProjectOwnerOrAdmin, async (req, res, next) => {
+    try {
+      const invite = await createWorkspaceInvite(req.projectId, req.user.userId, 14);
+      return res.status(201).json({
+        ok: true,
+        invite: {
+          token: invite.token,
+          joinUrl: `${getDashboardBaseUrl(appBaseUrl)}/join/${invite.token}`
+        }
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post('/invites/:token/accept', requireAuth, async (req, res, next) => {
+    try {
+      const token = String(req.params.token || '').trim();
+      const invite = await getWorkspaceInvite(token);
+      if (!invite) {
+        return res.status(404).json({ error: 'Invite link is invalid or expired' });
+      }
+
+      await addProjectMember(invite.projectId, req.user.userId, 'member');
+      return res.json({ ok: true, projectId: invite.projectId });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post('/projects/:projectId/slack/connect', requireAuth, requireProjectMembership, requireProjectOwnerOrAdmin, async (req, res, next) => {
+    try {
+      requireEnv('SLACK_CLIENT_ID');
+      requireEnv('SLACK_CLIENT_SECRET');
+
+      const state = await createOAuthState('slack_install', `${req.projectId}:${req.user.userId}`);
+      const url = new URL('https://slack.com/oauth/v2/authorize');
+      url.searchParams.set('client_id', requireEnv('SLACK_CLIENT_ID'));
+      url.searchParams.set('scope', 'commands,chat:write,app_mentions:read,channels:history,users:read,im:write');
+      url.searchParams.set('redirect_uri', getSlackRedirectUri(appBaseUrl));
+      url.searchParams.set('state', state);
+
+      return res.json({ ok: true, url: url.toString() });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   app.get('/projects/:projectId/slack/status', requireAuth, requireProjectMembership, async (req, res, next) => {
     try {
-      const [configResult, lastEventResult, mappings] = await Promise.all([
-        query(`SELECT slack_workspace_id, default_channel_id, created_at FROM slack_project_config WHERE project_id = $1 LIMIT 1`, [req.projectId]),
-        query(`SELECT MAX(created_at) AS last_event_at FROM tasks WHERE project_id = $1 AND source = 'slack'`, [req.projectId]),
+      const [configResult, mappings] = await Promise.all([
+        query(
+          `SELECT slack_workspace_id, default_channel_id, last_event_at, created_at
+           FROM slack_project_config
+           WHERE project_id = $1
+           LIMIT 1`,
+          [req.projectId]
+        ),
         listSlackUserMappings(req.projectId)
       ]);
 
       const config = configResult.rows[0] || null;
-      const lastEventAt = lastEventResult.rows[0]?.last_event_at || null;
-      const requestUrl = `${appBaseUrl}/ingest/slack/${req.projectId}`;
+      const lastEventAt = config?.last_event_at || null;
+      const requestUrl = `${appBaseUrl}/ingest/slack`;
+      const installation = config?.slack_workspace_id
+        ? await getSlackInstallationByWorkspaceId(config.slack_workspace_id)
+        : null;
 
       return res.json({
         ok: true,
         verified: Boolean(lastEventAt || config?.slack_workspace_id),
+        connected: Boolean(config?.slack_workspace_id),
+        botInstalled: Boolean(installation?.bot_token || process.env.SLACK_BOT_TOKEN),
         requestUrl,
         lastEventAt,
         slackWorkspaceId: config?.slack_workspace_id || null,
@@ -927,13 +1215,12 @@ function createApp() {
     }
   });
 
-  app.post('/ingest/slack/:projectId', async (req, res) => {
+  async function handleSlackIngest(req, res, fallbackProjectId, overrideText) {
     try {
       if (!verifySlackSignature(req)) {
         return res.status(401).json({ ok: false, error: 'invalid_slack_signature' });
       }
 
-      const projectId = String(req.params.projectId || '').trim();
       const body = req.body || {};
 
       if (body.type === 'url_verification' && body.challenge) {
@@ -944,12 +1231,22 @@ function createApp() {
         return res.status(200).json({ ok: true, ignored: 'bot_event' });
       }
 
-      const normalizedPayload = normalizeSlackIngestPayload(body);
+      const normalizedPayload = normalizeSlackIngestPayload(overrideText ? { ...body, text: overrideText } : body);
+      const projectId = await resolveProjectIdFromSlackPayload(normalizedPayload, fallbackProjectId);
+      if (!projectId) {
+        return res.status(200).json({
+          ok: false,
+          response_type: 'ephemeral',
+          text: 'Relay could not map this Slack workspace/channel to a project. Connect Slack from Relay dashboard first.'
+        });
+      }
+
       if (!normalizedPayload.text) {
+        await touchSlackProjectEvent(projectId, normalizedPayload.team_id || null, normalizedPayload.channel_id || null);
         return res.status(200).json({ ok: true, ignored: 'no_text' });
       }
 
-      const response = await ingestSlackTask(projectId, normalizedPayload);
+      const response = await ingestSlackTask(projectId, normalizedPayload, appBaseUrl);
       if (body.type === 'event_callback') {
         return res.status(200).json({ ok: true, task: response.task });
       }
@@ -958,43 +1255,34 @@ function createApp() {
     } catch (error) {
       return res.status(200).json({ ok: false, response_type: 'ephemeral', text: String(error?.message || error) });
     }
+  }
+
+  app.post('/ingest/slack', async (req, res) => {
+    return handleSlackIngest(req, res, null);
+  });
+
+  app.post('/ingest/slack/:projectId', async (req, res) => {
+    const projectId = String(req.params.projectId || '').trim();
+    return handleSlackIngest(req, res, projectId || null);
   });
 
   app.post('/ingest/slack-nudge/:projectId', async (req, res) => {
     try {
-      if (!verifySlackSignature(req)) {
-        return res.status(401).json({ ok: false, error: 'invalid_slack_signature' });
-      }
-
-      const projectId = String(req.params.projectId || '').trim();
       const parsed = parseNudgeInput(req.body.text || '');
-      const syntheticPayload = {
-        ...req.body,
-        text: `@${parsed.slackUserId} [task] ${parsed.description} file:${parsed.filePath}`
-      };
-
-      const response = await ingestSlackTask(projectId, syntheticPayload);
-      return res.status(200).json(response);
+      const syntheticText = `@${parsed.slackUserId} [task] ${parsed.description} file:${parsed.filePath}`;
+      const projectId = String(req.params.projectId || '').trim();
+      return handleSlackIngest(req, res, projectId || null, syntheticText);
     } catch (error) {
       return res.status(200).json({ ok: false, response_type: 'ephemeral', text: String(error?.message || error) });
     }
   });
 
   app.post('/slack/nudge', async (req, res) => {
-    const projectId = String(req.query.projectId || '').trim();
-    if (!projectId) {
-      return res.status(400).json({ ok: false, error: 'projectId query param is required' });
-    }
-
     try {
       const parsed = parseNudgeInput(req.body.text || '');
-      const syntheticPayload = {
-        ...req.body,
-        text: `@${parsed.slackUserId} [task] ${parsed.description} file:${parsed.filePath}`
-      };
-
-      const response = await ingestSlackTask(projectId, syntheticPayload);
-      return res.status(200).json(response);
+      const syntheticText = `@${parsed.slackUserId} [task] ${parsed.description} file:${parsed.filePath}`;
+      const queryProjectId = String(req.query.projectId || '').trim() || null;
+      return handleSlackIngest(req, res, queryProjectId, syntheticText);
     } catch (error) {
       return res.status(200).json({ ok: false, response_type: 'ephemeral', text: String(error?.message || error) });
     }
@@ -1236,6 +1524,9 @@ async function start() {
     try {
       await initSchema();
       await cleanupExpiredAuthArtifacts();
+      await query(`DELETE FROM slack_account_links WHERE expires_at <= NOW() OR (consumed_at IS NOT NULL AND consumed_at < NOW() - INTERVAL '1 day')`);
+      await query(`DELETE FROM workspace_pair_codes WHERE expires_at <= NOW() OR (consumed_at IS NOT NULL AND consumed_at < NOW() - INTERVAL '7 days')`);
+      await query(`DELETE FROM workspace_invites WHERE expires_at <= NOW() OR revoked_at IS NOT NULL`);
       runtimeState.startupInitError = null;
       log('info', 'startup_init_ready');
     } catch (error) {

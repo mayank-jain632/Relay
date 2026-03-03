@@ -59,6 +59,49 @@ async function runCompatibilityMigrations() {
   await safeQuery(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS pr_url TEXT`);
   await safeQuery(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS auto_close_on_merge BOOLEAN NOT NULL DEFAULT FALSE`);
   await safeQuery(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS slack_workspace_id TEXT`);
+  await safeQuery(`ALTER TABLE slack_project_config ADD COLUMN IF NOT EXISTS last_event_at TIMESTAMPTZ`);
+
+  await safeQuery(`CREATE TABLE IF NOT EXISTS slack_installations (
+    slack_workspace_id TEXT PRIMARY KEY,
+    enterprise_id TEXT,
+    team_name TEXT,
+    app_id TEXT,
+    access_token TEXT,
+    bot_token TEXT,
+    bot_user_id TEXT,
+    project_id UUID,
+    installed_by_user_id UUID,
+    installed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+
+  await safeQuery(`CREATE TABLE IF NOT EXISTS slack_account_links (
+    token TEXT PRIMARY KEY,
+    project_id UUID NOT NULL,
+    slack_user_id TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    consumed_at TIMESTAMPTZ
+  )`);
+
+  await safeQuery(`CREATE TABLE IF NOT EXISTS workspace_pair_codes (
+    code TEXT PRIMARY KEY,
+    project_id UUID NOT NULL,
+    created_by_user_id UUID,
+    consumed_by_user_id UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    consumed_at TIMESTAMPTZ
+  )`);
+
+  await safeQuery(`CREATE TABLE IF NOT EXISTS workspace_invites (
+    token TEXT PRIMARY KEY,
+    project_id UUID NOT NULL,
+    created_by_user_id UUID,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    revoked_at TIMESTAMPTZ
+  )`);
 
   await safeQuery(`ALTER TABLE slack_user_map ADD COLUMN IF NOT EXISTS project_id UUID`);
   await safeQuery(`ALTER TABLE slack_user_map ADD COLUMN IF NOT EXISTS github_user_id UUID`);
@@ -74,6 +117,11 @@ async function runCompatibilityMigrations() {
   await safeQuery(`CREATE INDEX IF NOT EXISTS idx_project_members_user ON project_members(user_id, project_id)`);
   await safeQuery(`CREATE INDEX IF NOT EXISTS idx_oauth_states_expires ON oauth_states(expires_at)`);
   await safeQuery(`CREATE INDEX IF NOT EXISTS idx_vscode_login_attempts_expires ON vscode_login_attempts(expires_at)`);
+  await safeQuery(`CREATE INDEX IF NOT EXISTS idx_slack_installations_project ON slack_installations(project_id)`);
+  await safeQuery(`CREATE INDEX IF NOT EXISTS idx_slack_project_config_workspace ON slack_project_config(slack_workspace_id, default_channel_id)`);
+  await safeQuery(`CREATE INDEX IF NOT EXISTS idx_workspace_pair_codes_project ON workspace_pair_codes(project_id, consumed_at, expires_at)`);
+  await safeQuery(`CREATE INDEX IF NOT EXISTS idx_workspace_invites_project ON workspace_invites(project_id, expires_at)`);
+  await safeQuery(`CREATE INDEX IF NOT EXISTS idx_slack_account_links_project ON slack_account_links(project_id, expires_at)`);
 }
 
 async function initSchema() {

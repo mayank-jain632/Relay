@@ -15,6 +15,7 @@ export interface DashboardSession {
 
 const SESSION_COOKIE = 'relay_dashboard_session';
 const LOGIN_COOKIE = 'relay_dashboard_login_id';
+const LOGIN_NEXT_COOKIE = 'relay_dashboard_login_next';
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 14;
 
 function base64Url(input: string): string {
@@ -86,6 +87,10 @@ export function getLoginCookieName(): string {
   return LOGIN_COOKIE;
 }
 
+export function getLoginNextCookieName(): string {
+  return LOGIN_NEXT_COOKIE;
+}
+
 export async function getDashboardSession(): Promise<DashboardSession | null> {
   const store = await cookies();
   return decodeSession(store.get(SESSION_COOKIE)?.value);
@@ -138,6 +143,33 @@ export async function getPendingLoginId(): Promise<string | null> {
 export async function clearPendingLoginId(): Promise<void> {
   const store = await cookies();
   store.set(LOGIN_COOKIE, '', {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: isSecureCookie(),
+    path: '/',
+    maxAge: 0
+  });
+}
+
+export async function setPendingLoginNext(nextPath: string): Promise<void> {
+  const store = await cookies();
+  store.set(LOGIN_NEXT_COOKIE, String(nextPath || '/projects'), {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: isSecureCookie(),
+    path: '/',
+    maxAge: 60 * 15
+  });
+}
+
+export async function getPendingLoginNext(): Promise<string | null> {
+  const store = await cookies();
+  return store.get(LOGIN_NEXT_COOKIE)?.value || null;
+}
+
+export async function clearPendingLoginNext(): Promise<void> {
+  const store = await cookies();
+  store.set(LOGIN_NEXT_COOKIE, '', {
     httpOnly: true,
     sameSite: 'lax',
     secure: isSecureCookie(),

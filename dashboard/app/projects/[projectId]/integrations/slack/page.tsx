@@ -3,9 +3,6 @@ import { requireDashboardSession } from '@/lib/auth';
 import { relayGet } from '@/lib/relay-api';
 import { DashboardShell } from '@/components/DashboardShell';
 
-const REQUIRED_SCOPES = ['commands', 'chat:write', 'app_mentions:read', 'channels:history'];
-const RECOMMENDED_EVENTS = ['app_mention', 'message.channels'];
-
 export default async function SlackIntegrationPage({
   params,
   searchParams
@@ -41,76 +38,51 @@ export default async function SlackIntegrationPage({
 
   return (
     <DashboardShell
-      title="Connect Slack"
-      subtitle="Set up Slack once, then task updates will sync automatically."
+      title="Slack Integration"
+      subtitle="Connect Slack once. Relay will route messages and task updates automatically."
       activeNav="slack"
       projectId={projectId}
       activeProjectName={projectName}
       sessionLogin={session.user.login}
       sessionName={session.user.name}
-      actions={<Link className="button-secondary" href={`/projects/${projectId}/tasks`}>Go to Tasks</Link>}
+      actions={(
+        <>
+          <form action={`/projects/${projectId}/integrations/slack/connect`} method="post">
+            <button className="button-primary" type="submit">Connect Slack</button>
+          </form>
+          <Link className="button-secondary" href={`/projects/${projectId}/tasks`}>Go to Tasks</Link>
+        </>
+      )}
     >
-      {searchParams.mapped ? <div className="notice">Teammate mapping saved.</div> : null}
+      {searchParams.connected ? <div className="notice">Slack connected successfully.</div> : null}
       {searchParams.error ? <div className="error">{String(searchParams.error)}</div> : null}
       {error ? <div className="error">{error}</div> : null}
 
       <section className="card grid">
-        <h2 className="card-title">Step 1: Paste this URL in Slack</h2>
+        <h2 className="card-title">Connection status</h2>
         <p className="muted" style={{ margin: 0 }}>
-          In your Slack app settings, open Event Subscriptions and paste this request URL.
+          Use the Connect Slack button above. You do not need to create a separate Slack app.
         </p>
-        <div className="code">{status?.requestUrl || 'Unavailable'}</div>
         <div className="row">
-          <span className="muted">Connection status:</span>
-          <strong>{status?.verified ? 'Verified' : 'Not verified yet'}</strong>
+          <span className="muted">Connected:</span>
+          <strong>{status?.connected ? 'Yes' : 'No'}</strong>
+          <span className="muted">Bot installed:</span>
+          <strong>{status?.botInstalled ? 'Yes' : 'No'}</strong>
           <span className="muted">Last Slack event:</span>
           <strong>{status?.lastEventAt ? new Date(status.lastEventAt).toLocaleString() : 'Never'}</strong>
         </div>
+        <div className="code">Ingest endpoint: {status?.requestUrl || 'Unavailable'}</div>
       </section>
 
       <section className="card grid">
-        <h2 className="card-title">Step 2: Enable these Slack permissions</h2>
-        <div className="grid two-col" style={{ gap: 10 }}>
-          <div>
-            <div className="muted" style={{ marginBottom: 6 }}>Required bot scopes</div>
-            <ul style={{ margin: 0, paddingLeft: 18 }}>
-              {REQUIRED_SCOPES.map((scope) => (
-                <li key={scope}>{scope}</li>
-              ))}
-            </ul>
-          </div>
-          <div>
-            <div className="muted" style={{ marginBottom: 6 }}>Recommended event subscriptions</div>
-            <ul style={{ margin: 0, paddingLeft: 18 }}>
-              {RECOMMENDED_EVENTS.map((eventName) => (
-                <li key={eventName}>{eventName}</li>
-              ))}
-            </ul>
-          </div>
-        </div>
-      </section>
-
-      <section className="card grid">
-        <h2 className="card-title">Step 3: Match Slack users to teammates</h2>
+        <h2 className="card-title">Account linking</h2>
         <p className="muted" style={{ margin: 0 }}>
-          This lets “My Tasks” show the right tasks for each person.
+          Relay now links Slack users automatically. If someone is not linked yet, Relay bot DMs them a GitHub link flow.
         </p>
-        <form className="row" action={`/projects/${projectId}/integrations/slack/map`} method="post">
-          <select className="select" name="slackUserId" required defaultValue="">
-            <option value="" disabled>Select Slack user</option>
-            {(users?.unmappedUsers || []).map((entry: any) => (
-              <option key={entry.slackUserId} value={entry.slackUserId}>
-                {entry.slackUserId}
-              </option>
-            ))}
-          </select>
-          <input className="input" type="text" name="githubLogin" placeholder="github username" required />
-          <button className="button-primary" type="submit">Save Mapping</button>
-        </form>
       </section>
 
       <section className="card grid">
-        <h2 className="card-title">Current teammate mappings</h2>
+        <h2 className="card-title">Current mapping status</h2>
         <table className="table">
           <thead>
             <tr>
@@ -134,12 +106,15 @@ export default async function SlackIntegrationPage({
             ) : null}
           </tbody>
         </table>
+        <p className="muted" style={{ margin: 0 }}>
+          Unmapped Slack users detected: {(users?.unmappedUsers || []).length}
+        </p>
       </section>
 
       <details className="card">
-        <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Advanced Slack details</summary>
+        <summary style={{ cursor: 'pointer', fontWeight: 600 }}>Advanced details</summary>
         <p className="muted" style={{ marginTop: 10 }}>
-          Slash command request URL format: <code>/slack/nudge?projectId={projectId}</code>
+          Legacy slash command URL format: <code>/slack/nudge?projectId={projectId}</code>
         </p>
       </details>
     </DashboardShell>
