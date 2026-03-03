@@ -8,6 +8,23 @@ interface CopyButtonProps {
   redirectUrl?: string;
 }
 
+function fallbackCopy(value: string): boolean {
+  if (typeof document === 'undefined') {
+    return false;
+  }
+
+  const input = document.createElement('textarea');
+  input.value = value;
+  input.setAttribute('readonly', 'true');
+  input.style.position = 'fixed';
+  input.style.opacity = '0';
+  document.body.appendChild(input);
+  input.select();
+  const ok = document.execCommand('copy');
+  document.body.removeChild(input);
+  return ok;
+}
+
 export function CopyButton({ value, label = 'Copy', redirectUrl }: CopyButtonProps) {
   const [copied, setCopied] = useState(false);
 
@@ -16,7 +33,7 @@ export function CopyButton({ value, label = 'Copy', redirectUrl }: CopyButtonPro
       return;
     }
 
-    const timer = setTimeout(() => setCopied(false), 1600);
+    const timer = setTimeout(() => setCopied(false), 1200);
     return () => clearTimeout(timer);
   }, [copied]);
 
@@ -29,16 +46,31 @@ export function CopyButton({ value, label = 'Copy', redirectUrl }: CopyButtonPro
           return;
         }
 
+        let success = false;
         try {
-          await navigator.clipboard.writeText(value);
-          setCopied(true);
-          if (redirectUrl) {
-            setTimeout(() => {
-              window.location.assign(redirectUrl);
-            }, 140);
+          if (navigator?.clipboard?.writeText) {
+            await navigator.clipboard.writeText(value);
+            success = true;
           }
         } catch {
+          success = false;
+        }
+
+        if (!success) {
+          success = fallbackCopy(value);
+        }
+
+        if (!success) {
           setCopied(false);
+          return;
+        }
+
+        setCopied(true);
+
+        if (redirectUrl) {
+          requestAnimationFrame(() => {
+            window.location.assign(redirectUrl);
+          });
         }
       }}
       aria-label={copied ? 'Copied' : label}

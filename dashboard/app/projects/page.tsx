@@ -4,6 +4,7 @@ import { relayGet } from '@/lib/relay-api';
 import { DashboardShell } from '@/components/DashboardShell';
 import { CopyButton } from '@/components/CopyButton';
 import { WorkspaceActionsMenu } from '@/components/WorkspaceActionsMenu';
+import { SetupGuideTransition } from '@/components/SetupGuideTransition';
 
 interface ProjectItem {
   id: string;
@@ -96,6 +97,93 @@ export default async function ProjectsPage({
     ? `/projects?project=${encodeURIComponent(selectedProject.id)}&extension_copied=1`
     : '/projects?extension_copied=1';
 
+  const guideSection = selectedProject ? (
+    <section className="card grid">
+      <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div>
+          <h2 className="card-title" style={{ marginBottom: 4 }}>{selectedProject.name}</h2>
+          <p className="subtitle" style={{ margin: 0 }}>Role: {selectedProject.role}</p>
+        </div>
+        <Link className="button-secondary" href={`/projects?project=${selectedProject.id}`}>Set Active</Link>
+      </div>
+
+      <div className="grid" style={{ gap: 8 }}>
+        <h3 style={{ margin: 0, fontSize: 14 }}>Progress checklist</h3>
+        {checklistItem('Workspace created', Boolean(onboarding?.workspaceCreated))}
+        {checklistItem('Slack connected', Boolean(onboarding?.slackConnected))}
+        {checklistItem('Extension linked', Boolean(onboarding?.extensionLinked || extensionCopied))}
+      </div>
+
+      <div className="grid two-col">
+        <div className="card" style={{ background: 'var(--surface-soft)' }}>
+          <h3 style={{ margin: '0 0 6px', fontSize: 14 }}>2. Connect Slack</h3>
+          <p className="muted" style={{ margin: '0 0 10px' }}>One click installs Relay app to your Slack workspace.</p>
+          <form action={`/projects/${selectedProject.id}/integrations/slack/connect`} method="post">
+            <button className="button-primary" type="submit">Connect Slack</button>
+          </form>
+          <p className="muted" style={{ margin: '10px 0 0' }}>
+            Status: {onboarding?.slackConnected ? 'Connected' : 'Not connected'}
+            {onboarding?.lastSlackEventAt ? ` · Last event ${new Date(onboarding.lastSlackEventAt).toLocaleString()}` : ''}
+          </p>
+        </div>
+
+        <div className="card" style={{ background: 'var(--surface-soft)' }}>
+          <h3 style={{ margin: '0 0 6px', fontSize: 14 }}>3. Install extension</h3>
+          <p className="muted" style={{ margin: '0 0 10px' }}>
+            In VS Code, run <code>Relay: Link Workspace</code> and paste a pair code.
+          </p>
+          <form action={`/projects/${selectedProject.id}/pair-codes/create`} method="post" className="row">
+            <button className="button-primary" type="submit">Generate Pair Code</button>
+          </form>
+          {pairCode ? (
+            <div className="row" style={{ marginTop: 10, alignItems: 'stretch' }}>
+              <div className="code" style={{ margin: 0, flex: 1 }}>
+                <div>Pair code: <strong>{pairCode}</strong></div>
+                {pairExpires ? <div style={{ marginTop: 6 }}>Expires: {new Date(pairExpires).toLocaleString()}</div> : null}
+              </div>
+              <CopyButton value={pairCode} redirectUrl={pairCopyRedirect} />
+            </div>
+          ) : null}
+        </div>
+      </div>
+
+      <div className="card" style={{ background: 'var(--surface-soft)' }}>
+        <h3 style={{ margin: '0 0 6px', fontSize: 14 }}>4. Invite teammates</h3>
+        <p className="muted" style={{ margin: '0 0 10px' }}>
+          Share one link. Teammates sign in with GitHub and join automatically.
+        </p>
+        <form action={`/projects/${selectedProject.id}/invites/create`} method="post" className="row">
+          <button className="button-primary" type="submit">Generate Invite Link</button>
+        </form>
+        {inviteUrl ? (
+          <div className="row" style={{ marginTop: 10, alignItems: 'stretch' }}>
+            <div className="code" style={{ margin: 0, flex: 1 }}>{inviteUrl}</div>
+            <CopyButton value={inviteUrl} />
+          </div>
+        ) : null}
+      </div>
+
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <span className="muted">Active workspace ID: {selectedProject.id}</span>
+        <span className="muted">Tasks: {onboarding?.taskCount ?? 0}</span>
+      </div>
+    </section>
+  ) : null;
+
+  const doneSection = selectedProject ? (
+    <section className="card">
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <div>
+          <h2 className="card-title" style={{ marginBottom: 4 }}>{selectedProject.name}</h2>
+          <p className="subtitle" style={{ margin: 0 }}>
+            Setup complete. Use workspace actions in the table below for sharing and setup utilities.
+          </p>
+        </div>
+        <Link className="button-secondary" href={`/projects/${selectedProject.id}/tasks`}>Open Tasks</Link>
+      </div>
+    </section>
+  ) : null;
+
   return (
     <DashboardShell
       title="Workspace Onboarding"
@@ -129,89 +217,13 @@ export default async function ProjectsPage({
         </form>
       </section>
 
-      {selectedProject && !setupChecklistComplete ? (
-        <section className="card grid">
-          <div className="row" style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <div>
-              <h2 className="card-title" style={{ marginBottom: 4 }}>{selectedProject.name}</h2>
-              <p className="subtitle" style={{ margin: 0 }}>Role: {selectedProject.role}</p>
-            </div>
-            <Link className="button-secondary" href={`/projects?project=${selectedProject.id}`}>Set Active</Link>
-          </div>
-
-          <div className="grid" style={{ gap: 8 }}>
-            <h3 style={{ margin: 0, fontSize: 14 }}>Progress checklist</h3>
-            {checklistItem('Workspace created', Boolean(onboarding?.workspaceCreated))}
-            {checklistItem('Slack connected', Boolean(onboarding?.slackConnected))}
-            {checklistItem('Extension linked', Boolean(onboarding?.extensionLinked || extensionCopied))}
-          </div>
-
-          <div className="grid two-col">
-            <div className="card" style={{ background: 'var(--surface-soft)' }}>
-              <h3 style={{ margin: '0 0 6px', fontSize: 14 }}>2. Connect Slack</h3>
-              <p className="muted" style={{ margin: '0 0 10px' }}>One click installs Relay app to your Slack workspace.</p>
-              <form action={`/projects/${selectedProject.id}/integrations/slack/connect`} method="post">
-                <button className="button-primary" type="submit">Connect Slack</button>
-              </form>
-              <p className="muted" style={{ margin: '10px 0 0' }}>
-                Status: {onboarding?.slackConnected ? 'Connected' : 'Not connected'}
-                {onboarding?.lastSlackEventAt ? ` · Last event ${new Date(onboarding.lastSlackEventAt).toLocaleString()}` : ''}
-              </p>
-            </div>
-
-            <div className="card" style={{ background: 'var(--surface-soft)' }}>
-              <h3 style={{ margin: '0 0 6px', fontSize: 14 }}>3. Install extension</h3>
-              <p className="muted" style={{ margin: '0 0 10px' }}>
-                In VS Code, run <code>Relay: Link Workspace</code> and paste a pair code.
-              </p>
-              <form action={`/projects/${selectedProject.id}/pair-codes/create`} method="post" className="row">
-                <button className="button-primary" type="submit">Generate Pair Code</button>
-              </form>
-              {pairCode ? (
-                <div className="row" style={{ marginTop: 10, alignItems: 'stretch' }}>
-                  <div className="code" style={{ margin: 0, flex: 1 }}>
-                    <div>Pair code: <strong>{pairCode}</strong></div>
-                    {pairExpires ? <div style={{ marginTop: 6 }}>Expires: {new Date(pairExpires).toLocaleString()}</div> : null}
-                  </div>
-                  <CopyButton value={pairCode} redirectUrl={pairCopyRedirect} />
-                </div>
-              ) : null}
-            </div>
-          </div>
-
-          <div className="card" style={{ background: 'var(--surface-soft)' }}>
-            <h3 style={{ margin: '0 0 6px', fontSize: 14 }}>4. Invite teammates</h3>
-            <p className="muted" style={{ margin: '0 0 10px' }}>
-              Share one link. Teammates sign in with GitHub and join automatically.
-            </p>
-            <form action={`/projects/${selectedProject.id}/invites/create`} method="post" className="row">
-              <button className="button-primary" type="submit">Generate Invite Link</button>
-            </form>
-            {inviteUrl ? (
-              <div className="row" style={{ marginTop: 10, alignItems: 'stretch' }}>
-                <div className="code" style={{ margin: 0, flex: 1 }}>{inviteUrl}</div>
-                <CopyButton value={inviteUrl} />
-              </div>
-            ) : null}
-          </div>
-
-          <div className="row" style={{ justifyContent: 'space-between' }}>
-            <span className="muted">Active workspace ID: {selectedProject.id}</span>
-            <span className="muted">Tasks: {onboarding?.taskCount ?? 0}</span>
-          </div>
-        </section>
-      ) : selectedProject ? (
-        <section className="card">
-          <div className="row" style={{ justifyContent: 'space-between' }}>
-            <div>
-              <h2 className="card-title" style={{ marginBottom: 4 }}>{selectedProject.name}</h2>
-              <p className="subtitle" style={{ margin: 0 }}>
-                Setup complete. Use workspace actions in the table below for sharing and setup utilities.
-              </p>
-            </div>
-            <Link className="button-secondary" href={`/projects/${selectedProject.id}/tasks`}>Open Tasks</Link>
-          </div>
-        </section>
+      {selectedProject ? (
+        <SetupGuideTransition
+          showGuide={!setupChecklistComplete}
+          animateOut={extensionCopied && setupChecklistComplete}
+          guide={guideSection}
+          done={doneSection}
+        />
       ) : (
         <section className="card">
           <p className="muted" style={{ margin: 0 }}>No workspaces yet. Start with Step 1 above.</p>
