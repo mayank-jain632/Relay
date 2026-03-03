@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react';
 interface CopyButtonProps {
   value: string;
   label?: string;
-  redirectUrl?: string;
+  onCopied?: () => void;
 }
 
 function fallbackCopy(value: string): boolean {
@@ -25,7 +25,7 @@ function fallbackCopy(value: string): boolean {
   return ok;
 }
 
-export function CopyButton({ value, label = 'Copy', redirectUrl }: CopyButtonProps) {
+export function CopyButton({ value, label = 'Copy', onCopied }: CopyButtonProps) {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
@@ -33,7 +33,7 @@ export function CopyButton({ value, label = 'Copy', redirectUrl }: CopyButtonPro
       return;
     }
 
-    const timer = setTimeout(() => setCopied(false), 1200);
+    const timer = setTimeout(() => setCopied(false), 1100);
     return () => clearTimeout(timer);
   }, [copied]);
 
@@ -66,12 +66,7 @@ export function CopyButton({ value, label = 'Copy', redirectUrl }: CopyButtonPro
         }
 
         setCopied(true);
-
-        if (redirectUrl) {
-          requestAnimationFrame(() => {
-            window.location.assign(redirectUrl);
-          });
-        }
+        onCopied?.();
       }}
       aria-label={copied ? 'Copied' : label}
     >
