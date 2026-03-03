@@ -18,14 +18,14 @@ function parseError(error: unknown): string {
 
 export async function GET(
   _request: Request,
-  context: { params: { projectId: string; taskId: string } }
+  context: { params: Promise<{ projectId: string; taskId: string }> }
 ) {
   const session = await getDashboardSession();
   if (!session) {
     return NextResponse.json({ ok: false, error: 'Not authenticated', events: [] }, { status: 401 });
   }
 
-  const { projectId, taskId } = context.params;
+  const { projectId, taskId } = await context.params;
 
   try {
     const data = await relayGet(

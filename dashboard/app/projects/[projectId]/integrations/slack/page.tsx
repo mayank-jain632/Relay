@@ -11,11 +11,12 @@ export default async function SlackIntegrationPage({
   params,
   searchParams
 }: {
-  params: { projectId: string };
-  searchParams: { [key: string]: string | string[] | undefined };
+  params: Promise<{ projectId: string }>;
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
   const session = await requireDashboardSession();
-  const { projectId } = params;
+  const { projectId } = await params;
+  const resolvedSearchParams = await searchParams;
 
   let status: any = null;
   let users: any = null;
@@ -61,10 +62,10 @@ export default async function SlackIntegrationPage({
         </>
       )}
     >
-      {searchParams.connected ? <div className="notice">Slack connected successfully.</div> : null}
-      {searchParams.test_sent ? <div className="notice">Test message sent successfully.</div> : null}
-      {searchParams.error ? <div className="error">{String(searchParams.error)}</div> : null}
-      {searchParams.test_error ? <div className="error">{String(searchParams.test_error)}</div> : null}
+      {resolvedSearchParams.connected ? <div className="notice">Slack connected successfully.</div> : null}
+      {resolvedSearchParams.test_sent ? <div className="notice">Test message sent successfully.</div> : null}
+      {resolvedSearchParams.error ? <div className="error">{String(resolvedSearchParams.error)}</div> : null}
+      {resolvedSearchParams.test_error ? <div className="error">{String(resolvedSearchParams.test_error)}</div> : null}
       {error ? <div className="error">{error}</div> : null}
 
       <section className="card grid">

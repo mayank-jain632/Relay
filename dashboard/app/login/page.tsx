@@ -5,7 +5,7 @@ import { redirect } from 'next/navigation';
 export default async function LoginPage({
   searchParams
 }: {
-  searchParams: { [key: string]: string | string[] | undefined };
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
   const session = await getDashboardSession();
   if (session) {
@@ -13,9 +13,10 @@ export default async function LoginPage({
   }
 
   const pendingLoginId = await getPendingLoginId();
-  const pending = searchParams.pending === '1';
-  const error = searchParams.error ? String(searchParams.error) : '';
-  const nextPath = searchParams.next ? String(searchParams.next) : '/projects';
+  const resolvedSearchParams = await searchParams;
+  const pending = resolvedSearchParams.pending === '1';
+  const error = resolvedSearchParams.error ? String(resolvedSearchParams.error) : '';
+  const nextPath = resolvedSearchParams.next ? String(resolvedSearchParams.next) : '/projects';
 
   return (
     <main className="page" style={{ maxWidth: 520 }}>

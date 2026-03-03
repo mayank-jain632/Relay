@@ -3,13 +3,13 @@ import { getAdminApiKey } from '@/lib/config';
 import { relayAdminPost, relayPost } from '@/lib/relay-api';
 import { getDashboardSession } from '@/lib/session';
 
-export async function POST(request: Request, context: { params: { projectId: string } }) {
+export async function POST(request: Request, context: { params: Promise<{ projectId: string }> }) {
   const session = await getDashboardSession();
   if (!session) {
     return NextResponse.redirect(new URL('/login', request.url));
   }
 
-  const { projectId } = context.params;
+  const { projectId } = await context.params;
   const encodedProjectId = encodeURIComponent(projectId);
   const formData = await request.formData().catch(() => null);
   const menuProject = encodeURIComponent(String(formData?.get('menu_project') || projectId));

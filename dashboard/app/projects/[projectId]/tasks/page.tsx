@@ -8,12 +8,13 @@ export default async function TasksPage({
   params,
   searchParams
 }: {
-  params: { projectId: string };
-  searchParams: { [key: string]: string | string[] | undefined };
+  params: Promise<{ projectId: string }>;
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
   const session = await requireDashboardSession();
-  const { projectId } = params;
-  const assigned = searchParams.assigned === 'me' ? 'me' : 'all';
+  const { projectId } = await params;
+  const resolvedSearchParams = await searchParams;
+  const assigned = resolvedSearchParams.assigned === 'me' ? 'me' : 'all';
 
   let tasks: any[] = [];
   let members: any[] = [];
@@ -55,9 +56,9 @@ export default async function TasksPage({
         </>
       )}
     >
-      {searchParams.created ? <div className="notice">Task created.</div> : null}
-      {searchParams.updated ? <div className="notice">Task updated.</div> : null}
-      {searchParams.error ? <div className="error">{String(searchParams.error)}</div> : null}
+      {resolvedSearchParams.created ? <div className="notice">Task created.</div> : null}
+      {resolvedSearchParams.updated ? <div className="notice">Task updated.</div> : null}
+      {resolvedSearchParams.error ? <div className="error">{String(resolvedSearchParams.error)}</div> : null}
       {error ? <div className="error">{error}</div> : null}
 
       <TasksBoard

@@ -2,13 +2,13 @@ import { NextResponse } from 'next/server';
 import { relayPost } from '@/lib/relay-api';
 import { getDashboardSession } from '@/lib/session';
 
-export async function POST(request: Request, context: { params: { projectId: string } }) {
+export async function POST(request: Request, context: { params: Promise<{ projectId: string }> }) {
   const session = await getDashboardSession();
   if (!session) {
     return NextResponse.redirect(new URL('/login', request.url));
   }
 
-  const { projectId } = context.params;
+  const { projectId } = await context.params;
 
   try {
     const data = await relayPost(`/projects/${encodeURIComponent(projectId)}/slack/connect`, session.token, {});

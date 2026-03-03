@@ -43,9 +43,10 @@ function renderError(errorParam: string | string[] | undefined): string {
 export default async function ProjectsPage({
   searchParams
 }: {
-  searchParams: { [key: string]: string | string[] | undefined };
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
   const session = await requireDashboardSession();
+  const resolvedSearchParams = await searchParams;
 
   let projects: ProjectItem[] = [];
   let error = '';
@@ -57,10 +58,10 @@ export default async function ProjectsPage({
     error = String(err instanceof Error ? err.message : err);
   }
 
-  const projectParam = typeof searchParams.project === 'string' ? searchParams.project : '';
+  const projectParam = typeof resolvedSearchParams.project === 'string' ? resolvedSearchParams.project : '';
   const selectedProject = projects.find((project) => project.id === projectParam) ?? projects[0];
   const navProjectId = selectedProject?.id;
-  const uiError = renderError(searchParams.error);
+  const uiError = renderError(resolvedSearchParams.error);
 
   const onboardingByProjectId: Record<string, OnboardingState | null> = {};
   if (projects.length > 0) {
@@ -80,11 +81,11 @@ export default async function ProjectsPage({
     }
   }
 
-  const pairCode = typeof searchParams.pair_code === 'string' ? searchParams.pair_code : '';
-  const pairExpires = typeof searchParams.pair_expires === 'string' ? searchParams.pair_expires : '';
-  const inviteUrl = typeof searchParams.invite_url === 'string' ? searchParams.invite_url : '';
-  const keepMenuOpen = searchParams.menu_open === '1';
-  const menuProjectId = typeof searchParams.menu_project === 'string' ? searchParams.menu_project : '';
+  const pairCode = typeof resolvedSearchParams.pair_code === 'string' ? resolvedSearchParams.pair_code : '';
+  const pairExpires = typeof resolvedSearchParams.pair_expires === 'string' ? resolvedSearchParams.pair_expires : '';
+  const inviteUrl = typeof resolvedSearchParams.invite_url === 'string' ? resolvedSearchParams.invite_url : '';
+  const keepMenuOpen = resolvedSearchParams.menu_open === '1';
+  const menuProjectId = typeof resolvedSearchParams.menu_project === 'string' ? resolvedSearchParams.menu_project : '';
 
   return (
     <DashboardShell
@@ -103,10 +104,10 @@ export default async function ProjectsPage({
         </>
       ) : null}
     >
-      {searchParams.created ? <div className="notice">Workspace created. Continue setup from that workspace's Setup & Share dropdown.</div> : null}
-      {searchParams.connected ? <div className="notice">Slack connected successfully.</div> : null}
-      {searchParams.paired ? <div className="notice">Pair code generated.</div> : null}
-      {searchParams.invite_created ? <div className="notice">Invite link generated.</div> : null}
+      {resolvedSearchParams.created ? <div className="notice">Workspace created. Continue setup from that workspace's Setup & Share dropdown.</div> : null}
+      {resolvedSearchParams.connected ? <div className="notice">Slack connected successfully.</div> : null}
+      {resolvedSearchParams.paired ? <div className="notice">Pair code generated.</div> : null}
+      {resolvedSearchParams.invite_created ? <div className="notice">Invite link generated.</div> : null}
       {uiError ? <div className="error">{uiError}</div> : null}
       {error ? <div className="error">{error}</div> : null}
 

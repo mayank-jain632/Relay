@@ -4,14 +4,14 @@ import { getDashboardSession } from '@/lib/session';
 
 export async function POST(
   request: Request,
-  context: { params: { projectId: string; taskId: string } }
+  context: { params: Promise<{ projectId: string; taskId: string }> }
 ) {
   const session = await getDashboardSession();
   if (!session) {
     return NextResponse.redirect(new URL('/login', request.url));
   }
 
-  const { projectId, taskId } = context.params;
+  const { projectId, taskId } = await context.params;
   const formData = await request.formData();
   const status = String(formData.get('status') || '').trim();
   const assignedToUserIdRaw = String(formData.get('assignedToUserId') || '').trim();
