@@ -678,7 +678,7 @@ function createApp() {
     });
   });
 
-  app.post('/auth/vscode/start', async (_req, res, next) => {
+  const handleVscodeAuthStart = async (_req, res, next) => {
     try {
       requireEnv('GITHUB_CLIENT_ID');
       requireEnv('GITHUB_CLIENT_SECRET');
@@ -690,7 +690,10 @@ function createApp() {
     } catch (error) {
       return next(error);
     }
-  });
+  };
+
+  app.post('/auth/vscode/start', handleVscodeAuthStart);
+  app.get('/auth/vscode/start', handleVscodeAuthStart);
 
   app.get('/auth/github/login', async (req, res, next) => {
     try {
