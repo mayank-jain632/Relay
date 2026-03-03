@@ -102,7 +102,7 @@ export function WorkspaceActionsMenu({
               <div className="workspace-actions-meta">Role: {projectRole}</div>
             </div>
             <div className="workspace-actions-inline-buttons">
-              <Link className="button-secondary" href={`/projects?project=${projectId}`}>Set Active</Link>
+              <Link className="button-secondary" href={`/projects/${projectId}/integrations/slack`}>Slack</Link>
               <Link className="button-secondary" href={`/projects/${projectId}/tasks`}>Tasks</Link>
             </div>
           </div>

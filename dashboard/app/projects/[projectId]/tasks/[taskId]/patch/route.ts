@@ -15,10 +15,20 @@ export async function POST(
   const formData = await request.formData();
   const status = String(formData.get('status') || '').trim();
   const assignedToUserIdRaw = String(formData.get('assignedToUserId') || '').trim();
+  const title = String(formData.get('title') || '').trim();
+  const descriptionRaw = formData.get('description');
 
   const patch: Record<string, unknown> = {};
   if (status) {
     patch.status = status;
+  }
+
+  if (title) {
+    patch.title = title;
+  }
+
+  if (descriptionRaw !== null) {
+    patch.description = String(descriptionRaw || '');
   }
 
   if (assignedToUserIdRaw === '__none__') {

@@ -97,6 +97,7 @@ export default async function ProjectsPage({
       sessionName={session.user.name}
       actions={navProjectId ? (
         <>
+          <Link className="button-secondary" href={`/projects?project=${navProjectId}`}>Set Active</Link>
           <Link className="button-secondary" href={`/projects/${navProjectId}/integrations/slack`}>Slack</Link>
           <Link className="button-secondary" href={`/projects/${navProjectId}/tasks`}>Tasks</Link>
         </>
@@ -122,7 +123,7 @@ export default async function ProjectsPage({
         <section className="card grid">
           <h2 className="card-title">All workspaces</h2>
           <p className="muted" style={{ margin: 0 }}>
-            Use Setup & Share to open the complete setup guide for any workspace. It collapses cleanly when closed.
+            Use Set Active for frequent switching. Open Setup & Share to manage pairing and invite links for that workspace.
           </p>
           <table className="table">
             <thead>
@@ -130,7 +131,7 @@ export default async function ProjectsPage({
                 <th>Name</th>
                 <th>Role</th>
                 <th>Created</th>
-                <th>Setup & Share</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -140,17 +141,20 @@ export default async function ProjectsPage({
                   <td>{project.role}</td>
                   <td>{new Date(project.createdAt).toLocaleString()}</td>
                   <td>
-                    <WorkspaceActionsMenu
-                      projectId={project.id}
-                      projectName={project.name}
-                      projectRole={project.role}
-                      onboarding={onboardingByProjectId[project.id]}
-                      defaultOpen={keepMenuOpen && menuProjectId === project.id}
-                      pairCode={project.id === selectedProject?.id ? pairCode : ''}
-                      pairExpires={project.id === selectedProject?.id ? pairExpires : ''}
-                      inviteUrl={project.id === selectedProject?.id ? inviteUrl : ''}
-                      showGeneratedValues={project.id === selectedProject?.id}
-                    />
+                    <div className="row" style={{ gap: 6 }}>
+                      <Link className="button-secondary" href={`/projects?project=${project.id}`}>Set Active</Link>
+                      <WorkspaceActionsMenu
+                        projectId={project.id}
+                        projectName={project.name}
+                        projectRole={project.role}
+                        onboarding={onboardingByProjectId[project.id]}
+                        defaultOpen={keepMenuOpen && menuProjectId === project.id}
+                        pairCode={project.id === selectedProject?.id ? pairCode : ''}
+                        pairExpires={project.id === selectedProject?.id ? pairExpires : ''}
+                        inviteUrl={project.id === selectedProject?.id ? inviteUrl : ''}
+                        showGeneratedValues={project.id === selectedProject?.id}
+                      />
+                    </div>
                   </td>
                 </tr>
               ))}

@@ -182,6 +182,65 @@ async function postSlackMessage({ workspaceId, channelId, text, threadTs }) {
   }
 }
 
+async function fetchSlackUserProfile(workspaceId, slackUserId) {
+  const raw = String(slackUserId || '').trim();
+  if (!raw || !isLikelySlackUserId(raw)) {
+    const handle = raw.replace(/^@+/, '');
+    return handle
+      ? {
+          id: raw,
+          handle,
+          displayName: handle,
+          realName: null,
+          avatarUrl: null
+        }
+      : null;
+  }
+
+  const token = await getSlackBotTokenForWorkspace(workspaceId);
+  if (!token) {
+    return null;
+  }
+
+  try {
+    const response = await fetch('https://slack.com/api/users.info?user=' + encodeURIComponent(raw), {
+      method: 'GET',
+      headers: {
+        Authorization: 'Bearer ' + token
+      }
+    });
+
+    const result = await response.json();
+    if (!response.ok || !result?.ok || !result?.user) {
+      return {
+        id: raw,
+        handle: raw,
+        displayName: raw,
+        realName: null,
+        avatarUrl: null
+      };
+    }
+
+    const user = result.user;
+    const profile = user.profile || {};
+    return {
+      id: raw,
+      handle: String(user.name || '').trim() || raw,
+      displayName: String(profile.display_name || profile.real_name || user.real_name || user.name || raw).trim(),
+      realName: String(profile.real_name || user.real_name || '').trim() || null,
+      avatarUrl: String(profile.image_72 || profile.image_48 || profile.image_32 || '').trim() || null
+    };
+  } catch {
+    return {
+      id: raw,
+      handle: raw,
+      displayName: raw,
+      realName: null,
+      avatarUrl: null
+    };
+  }
+}
+
 async function sendSlackAccountLink(projectId, slackWorkspaceId, slackUserId, appBaseUrl) {
   if (!projectId || !isLikelySlackUserId(slackUserId)) {
     return null;
@@ -1140,6 +1199,9 @@ function createApp() {
       const installation = config?.slack_workspace_id
         ? await getSlackInstallationByWorkspaceId(config.slack_workspace_id)
         : null;
+      const connectedBy = installation?.installed_by_user_id
+        ? await getUserById(String(installation.installed_by_user_id))
+        : null;
 
       return res.json({
         ok: true,
@@ -1149,8 +1211,17 @@ function createApp() {
         requestUrl,
         lastEventAt,
         slackWorkspaceId: config?.slack_workspace_id || null,
+        slackWorkspaceName: installation?.team_name || null,
         defaultChannelId: config?.default_channel_id || null,
-        mappedUsersCount: mappings.length
+        mappedUsersCount: mappings.length,
+        connectedBy: connectedBy
+          ? {
+              userId: connectedBy.userId,
+              login: connectedBy.login,
+              name: connectedBy.name,
+              avatarUrl: connectedBy.avatarUrl
+            }
+          : null
       });
     } catch (error) {
       return next(error);
@@ -1159,7 +1230,7 @@ function createApp() {
 
   app.get('/projects/:projectId/slack/users', requireAuth, requireProjectMembership, async (req, res, next) => {
     try {
-      const [mappedUsers, seenResult] = await Promise.all([
+      const [mappedUsers, seenResult, configResult] = await Promise.all([
         listSlackUserMappings(req.projectId),
         query(
           `SELECT
@@ -1172,10 +1243,25 @@ function createApp() {
            GROUP BY 1
            ORDER BY MAX(created_at) DESC`,
           [req.projectId]
+        ),
+        query(
+          `SELECT slack_workspace_id
+           FROM slack_project_config
+           WHERE project_id = $1
+           LIMIT 1`,
+          [req.projectId]
         )
       ]);
 
-      const mappedKeys = new Set(mappedUsers.map((entry) => String(entry.slackUserId || '').toLowerCase()));
+      const workspaceId = configResult.rows[0]?.slack_workspace_id || null;
+      const mappedWithProfiles = await Promise.all(
+        mappedUsers.map(async (entry) => ({
+          ...entry,
+          slackProfile: await fetchSlackUserProfile(workspaceId, entry.slackUserId)
+        }))
+      );
+
+      const mappedKeys = new Set(mappedWithProfiles.map((entry) => String(entry.slackUserId || '').toLowerCase()));
       const unmappedUsers = seenResult.rows
         .map((row) => ({
           slackUserId: row.slack_user_id,
@@ -1183,7 +1269,78 @@ function createApp() {
         }))
         .filter((entry) => entry.slackUserId && !mappedKeys.has(String(entry.slackUserId).toLowerCase()));
 
-      return res.json({ ok: true, mappedUsers, unmappedUsers });
+      const unmappedWithProfiles = await Promise.all(
+        unmappedUsers.map(async (entry) => ({
+          ...entry,
+          slackProfile: await fetchSlackUserProfile(workspaceId, entry.slackUserId)
+        }))
+      );
+
+      return res.json({
+        ok: true,
+        slackWorkspaceId: workspaceId,
+        mappedUsers: mappedWithProfiles,
+        unmappedUsers: unmappedWithProfiles
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post('/projects/:projectId/slack/test-message', requireAuth, requireProjectMembership, requireProjectOwnerOrAdmin, async (req, res, next) => {
+    try {
+      const body = req.body || {};
+      const target = String(body.target || 'default_channel').trim();
+      const customChannelId = String(body.channelId || '').trim();
+
+      const configResult = await query(
+        `SELECT slack_workspace_id, default_channel_id
+         FROM slack_project_config
+         WHERE project_id = $1
+         LIMIT 1`,
+        [req.projectId]
+      );
+      const config = configResult.rows[0] || null;
+
+      let channelId = '';
+      if (target === 'custom_channel') {
+        channelId = customChannelId;
+      } else if (target === 'my_dm') {
+        const mapResult = await query(
+          `SELECT slack_user_id
+           FROM slack_user_map
+           WHERE project_id = $1 AND github_user_id = $2
+           LIMIT 1`,
+          [req.projectId, req.user.userId]
+        );
+        channelId = String(mapResult.rows[0]?.slack_user_id || '').trim();
+      } else {
+        channelId = String(config?.default_channel_id || '').trim() || customChannelId;
+      }
+
+      if (!channelId) {
+        return res.status(400).json({ error: 'No Slack destination found. Provide a channel id or map your Slack account.' });
+      }
+
+      const text = String(body.text || '').trim() ||
+        `Relay test message for ${req.projectId} from @${req.user.login} at ${new Date().toLocaleString()}`;
+
+      const warning = await postSlackMessage({
+        workspaceId: config?.slack_workspace_id || null,
+        channelId,
+        text
+      });
+
+      if (warning) {
+        return res.status(502).json({ error: warning });
+      }
+
+      return res.json({
+        ok: true,
+        target,
+        channelId,
+        workspaceId: config?.slack_workspace_id || null
+      });
     } catch (error) {
       return next(error);
     }
