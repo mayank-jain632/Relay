@@ -371,6 +371,151 @@ function verifySlackSignature(req) {
   return crypto.timingSafeEqual(sigBuf, digestBuf);
 }
 
+function verifyGitHubSignature(req) {
+  const secret = normalizeSecret(process.env.GITHUB_WEBHOOK_SECRET);
+  if (!secret) {
+    return { ok: false, reason: 'missing_secret' };
+  }
+
+  const signature = String(req.headers['x-hub-signature-256'] || '').trim();
+  const rawBody = String(req.rawBody || '');
+  if (!signature || !rawBody) {
+    return { ok: false, reason: 'missing_signature' };
+  }
+
+  const digest = `sha256=${crypto.createHmac('sha256', secret).update(rawBody).digest('hex')}`;
+  const signatureBuf = Buffer.from(signature);
+  const digestBuf = Buffer.from(digest);
+  if (signatureBuf.length !== digestBuf.length) {
+    return { ok: false, reason: 'invalid_signature' };
+  }
+
+  const valid = crypto.timingSafeEqual(signatureBuf, digestBuf);
+  return valid ? { ok: true } : { ok: false, reason: 'invalid_signature' };
+}
+
+function buildGitHubCompareCandidates(repoFullName, baseRef, headRef) {
+  const repo = String(repoFullName || '').trim().toLowerCase();
+  const base = String(baseRef || '').trim();
+  const head = String(headRef || '').trim();
+  if (!repo || !base || !head) {
+    return [];
+  }
+
+  const encoded = `https://github.com/${repo}/compare/${encodeURIComponent(base)}...${encodeURIComponent(head)}`;
+  const raw = `https://github.com/${repo}/compare/${base}...${head}`;
+  return Array.from(
+    new Set([encoded, `${encoded}?expand=1`, raw, `${raw}?expand=1`].map((item) => item.toLowerCase()))
+  );
+}
+
+async function findAutoCloseTasksForMergedPr({ branchName, repoFullName, compareCandidates, prUrl }) {
+  const branch = String(branchName || '').trim();
+  const repo = String(repoFullName || '').trim().toLowerCase();
+  const prUrlValue = String(prUrl || '').trim().toLowerCase();
+  const compare = Array.isArray(compareCandidates) && compareCandidates.length > 0 ? compareCandidates : [''];
+
+  if (!branch && !prUrlValue && compare.every((item) => !item)) {
+    return [];
+  }
+
+  const repoPattern = repo ? `%github.com/${repo}/%` : '';
+  const result = await query(
+    `SELECT id, project_id
+     FROM tasks
+     WHERE auto_close_on_merge = TRUE
+       AND status <> 'done'
+       AND (
+         (
+           LOWER(COALESCE(branch_name, '')) = LOWER($1)
+           AND ($2 = '' OR LOWER(COALESCE(pr_url, '')) LIKE $2)
+         )
+         OR LOWER(COALESCE(pr_url, '')) = ANY($3::text[])
+         OR ($4 <> '' AND LOWER(COALESCE(pr_url, '')) = $4)
+       )
+     ORDER BY updated_at DESC
+     LIMIT 200`,
+    [branch, repoPattern, compare, prUrlValue]
+  );
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    projectId: row.project_id
+  }));
+}
+
+async function autoCloseTasksForMergedPullRequest(req, payload) {
+  const action = String(payload?.action || '').trim().toLowerCase();
+  const pullRequest = payload?.pull_request || {};
+  if (action !== 'closed' || !pullRequest?.merged) {
+    return { matched: 0, updated: 0, ignored: 'not_merged_pull_request' };
+  }
+
+  const repoFullName = String(
+    pullRequest?.base?.repo?.full_name || payload?.repository?.full_name || ''
+  ).trim().toLowerCase();
+  const headRef = String(pullRequest?.head?.ref || '').trim();
+  const baseRef = String(pullRequest?.base?.ref || '').trim();
+  const prUrl = String(pullRequest?.html_url || '').trim();
+
+  const candidates = await findAutoCloseTasksForMergedPr({
+    branchName: headRef,
+    repoFullName,
+    compareCandidates: buildGitHubCompareCandidates(repoFullName, baseRef, headRef),
+    prUrl
+  });
+
+  let updated = 0;
+  for (const candidate of candidates) {
+    const before = await getTaskById(candidate.projectId, candidate.id);
+    if (!before || before.status === 'done' || !before.autoCloseOnMerge) {
+      continue;
+    }
+
+    const patch = {
+      status: 'done',
+      updatedByUserId: null,
+      prUrl: prUrl || before.prUrl || null
+    };
+
+    const task = await patchTask(candidate.projectId, candidate.id, patch);
+    if (!task || before.status === task.status) {
+      continue;
+    }
+
+    updated += 1;
+    const warning = await postStatusToSlack(task);
+    if (warning) {
+      log('error', 'slack_status_post_failed', {
+        requestId: req.requestId,
+        taskId: task.id,
+        warning
+      });
+    }
+
+    await safeRecordTaskEvent(req, {
+      projectId: candidate.projectId,
+      taskId: task.id,
+      actorUserId: null,
+      actorLabel: 'github-webhook',
+      eventType: 'task.auto_closed_on_merge',
+      summary: 'Auto-closed after PR merged',
+      metadata: {
+        pullRequestUrl: prUrl || null,
+        repository: repoFullName || null,
+        baseRef: baseRef || null,
+        headRef: headRef || null
+      }
+    });
+  }
+
+  return {
+    matched: candidates.length,
+    updated,
+    ignored: updated === 0 ? 'no_matching_auto_close_tasks' : null
+  };
+}
+
 function renderAuthSuccessPage(options = {}) {
   const autoCompleteUrl = String(options.autoCompleteUrl || '').trim();
   const escapedAutoCompleteUrl = autoCompleteUrl
@@ -1509,6 +1654,33 @@ function createApp() {
       return handleSlackIngest(req, res, queryProjectId, syntheticText);
     } catch (error) {
       return res.status(200).json({ ok: false, response_type: 'ephemeral', text: String(error?.message || error) });
+    }
+  });
+
+  app.post('/webhooks/github', async (req, res, next) => {
+    try {
+      const signature = verifyGitHubSignature(req);
+      if (!signature.ok) {
+        if (signature.reason === 'missing_secret') {
+          return res.status(503).json({ ok: false, error: 'github_webhook_not_configured' });
+        }
+
+        return res.status(401).json({ ok: false, error: 'invalid_github_signature' });
+      }
+
+      const event = String(req.headers['x-github-event'] || '').trim().toLowerCase();
+      if (event === 'ping') {
+        return res.status(200).json({ ok: true, event: 'ping' });
+      }
+
+      if (event !== 'pull_request') {
+        return res.status(200).json({ ok: true, ignored: event || 'unknown_event' });
+      }
+
+      const result = await autoCloseTasksForMergedPullRequest(req, req.body || {});
+      return res.status(200).json({ ok: true, event, ...result });
+    } catch (error) {
+      return next(error);
     }
   });
 

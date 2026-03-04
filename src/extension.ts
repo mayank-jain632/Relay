@@ -715,9 +715,10 @@ async function openPr(taskId: string): Promise<void> {
   await vscode.env.openExternal(vscode.Uri.parse(compareUrl));
   await patchTaskRequest(taskId, {
     prUrl: compareUrl,
-    status: 'review'
+    status: 'review',
+    autoCloseOnMerge: true
   });
-  vscode.window.showInformationMessage('Opened PR compare view and moved task to review.');
+  vscode.window.showInformationMessage('Opened PR compare view, moved task to review, and enabled auto-close on merge.');
 }
 
 function resolveTaskFileUri(filePath: string): vscode.Uri {
