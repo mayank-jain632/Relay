@@ -139,7 +139,8 @@
     "dashboard:install": "npm --prefix dashboard install",
     "dashboard:dev": "npm --prefix dashboard run dev",
     "dashboard:build": "npm --prefix dashboard run build",
-    "dashboard:start": "npm --prefix dashboard run start"
+    "dashboard:start": "npm --prefix dashboard run start",
+    "db:backfill:relay": "node server/scripts/backfill-relay-native-tasks.js"
   },
   "dependencies": {
     "express": "^4.21.2",

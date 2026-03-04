@@ -106,6 +106,12 @@ async function createProject(name) {
   const projectId = uuidv4();
   const projectName = String(name || '').trim() || 'Untitled';
   await query(`INSERT INTO projects (id, name, created_at) VALUES ($1, $2, NOW())`, [projectId, projectName]);
+  await query(
+    `INSERT INTO relay_workspaces (id, name, owner_user_id, created_at, updated_at)
+     VALUES ($1, $2, NULL, NOW(), NOW())
+     ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, updated_at = NOW()`,
+    [projectId, projectName]
+  );
   return { id: projectId, name: projectName };
 }
 
@@ -117,6 +123,17 @@ async function addProjectMember(projectId, userId, role = 'member') {
      DO UPDATE SET role = EXCLUDED.role`,
     [projectId, userId, role]
   );
+
+  if (String(role || '').toLowerCase() === 'owner') {
+    await query(
+      `INSERT INTO relay_workspaces (id, name, owner_user_id, created_at, updated_at)
+       SELECT p.id, p.name, $2, NOW(), NOW()
+       FROM projects p
+       WHERE p.id = $1
+       ON CONFLICT (id) DO UPDATE SET owner_user_id = EXCLUDED.owner_user_id, updated_at = NOW()`,
+      [projectId, userId]
+    );
+  }
 
   return { projectId, userId, role };
 }

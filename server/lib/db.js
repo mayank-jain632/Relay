@@ -50,6 +50,34 @@ async function withTransaction(fn) {
   }
 }
 
+async function runSqlFile(filePath) {
+  if (!fs.existsSync(filePath)) {
+    return;
+  }
+
+  const sql = fs.readFileSync(filePath, 'utf8').trim();
+  if (!sql) {
+    return;
+  }
+
+  await query(sql);
+}
+
+async function runMigrationsDirectory(dirPath) {
+  if (!fs.existsSync(dirPath)) {
+    return;
+  }
+
+  const files = fs
+    .readdirSync(dirPath)
+    .filter((name) => name.endsWith('.sql'))
+    .sort((a, b) => a.localeCompare(b));
+
+  for (const file of files) {
+    await runSqlFile(path.join(dirPath, file));
+  }
+}
+
 async function runCompatibilityMigrations() {
   await safeQuery(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS project_id UUID`);
   await safeQuery(`ALTER TABLE tasks ADD COLUMN IF NOT EXISTS assigned_to_user_id UUID`);
@@ -131,7 +159,6 @@ async function runCompatibilityMigrations() {
   await safeQuery(`CREATE INDEX IF NOT EXISTS idx_vscode_login_attempts_expires ON vscode_login_attempts(expires_at)`);
   await safeQuery(`CREATE INDEX IF NOT EXISTS idx_slack_installations_project ON slack_installations(project_id)`);
 
-  // Repair stale project->workspace mappings created before Slack routing hardening.
   await safeQuery(`UPDATE slack_project_config cfg
     SET slack_workspace_id = inst.slack_workspace_id
     FROM slack_installations inst
@@ -143,13 +170,15 @@ async function runCompatibilityMigrations() {
   await safeQuery(`CREATE INDEX IF NOT EXISTS idx_workspace_invites_project ON workspace_invites(project_id, expires_at)`);
   await safeQuery(`CREATE INDEX IF NOT EXISTS idx_slack_account_links_project ON slack_account_links(project_id, expires_at)`);
   await safeQuery(`CREATE INDEX IF NOT EXISTS idx_task_events_project_task_created ON task_events(project_id, task_id, created_at DESC)`);
-
 }
 
 async function initSchema() {
-  const schemaPath = path.join(process.cwd(), 'server', 'sql', 'init.sql');
-  const sql = fs.readFileSync(schemaPath, 'utf8');
-  await query(sql);
+  const basePath = path.join(process.cwd(), 'server', 'sql', 'init.sql');
+  await runSqlFile(basePath);
+
+  const migrationsPath = path.join(process.cwd(), 'server', 'sql', 'migrations');
+  await runMigrationsDirectory(migrationsPath);
+
   await runCompatibilityMigrations();
 }
 
