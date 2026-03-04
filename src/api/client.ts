@@ -1,4 +1,4 @@
-import { ProjectSummary, RelayUser, Task, TaskDetailResponse, TaskListResponse } from '../shared/types';
+import { ProjectSummary, RelayCapabilities, RelayUser, Task, TaskDetailResponse, TaskListResponse } from '../shared/types';
 import { GitCommit } from '../git/git';
 
 export interface ApiContext {
@@ -241,4 +241,13 @@ export async function addTaskCommit(taskId: string, commit: GitCommit): Promise<
 
   const data = (await response.json()) as TaskDetailResponse;
   return data.task;
+}
+
+export async function fetchCapabilities(): Promise<RelayCapabilities> {
+  const response = await authFetch('/api/capabilities');
+  if (!response.ok) {
+    throw new Error(`Capabilities fetch failed: ${response.status}`);
+  }
+
+  return (await response.json()) as RelayCapabilities;
 }

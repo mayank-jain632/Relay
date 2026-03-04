@@ -18,6 +18,13 @@ const {
   recordTaskEvent
 } = require('./lib/task-repo');
 const {
+  getTaskByIdV2,
+  getTaskBySlackThread,
+  listTasksV2
+} = require('./lib/task-repo-v2');
+const taskServiceV2 = require('./lib/task-service-v2');
+const { isTasksDualWriteEnabled, isTasksReadV2Enabled } = require('./lib/feature-flags');
+const {
   addProjectMember,
   createProject,
   getProjectMembership,
@@ -129,6 +136,38 @@ function getDashboardBaseUrl(appBaseUrl) {
 
 function getSlackRedirectUri(appBaseUrl) {
   return String(process.env.SLACK_REDIRECT_URI || `${appBaseUrl}/auth/slack/callback`).trim();
+}
+
+async function listTasksCompat(projectId, options = {}) {
+  if (isTasksReadV2Enabled()) {
+    return listTasksV2(projectId, options);
+  }
+
+  return listTasks(projectId, options);
+}
+
+async function getTaskByIdCompat(projectId, taskId) {
+  if (isTasksReadV2Enabled()) {
+    return getTaskByIdV2(projectId, taskId);
+  }
+
+  return getTaskById(projectId, taskId);
+}
+
+function applyTaskFilters(tasks, options = {}) {
+  let output = Array.isArray(tasks) ? tasks.slice() : [];
+
+  if (options.status) {
+    const desired = String(options.status).trim().toLowerCase();
+    output = output.filter((task) => String(task.status || '').toLowerCase() === desired);
+  }
+
+  if (options.assignee) {
+    const desired = String(options.assignee).trim().toLowerCase();
+    output = output.filter((task) => String(task.assignee_id || '').toLowerCase() === desired);
+  }
+
+  return output;
 }
 
 function isLikelySlackUserId(value) {
@@ -408,6 +447,20 @@ function buildGitHubCompareCandidates(repoFullName, baseRef, headRef) {
     new Set([encoded, `${encoded}?expand=1`, raw, `${raw}?expand=1`].map((item) => item.toLowerCase()))
   );
 }
+function extractRepoFullNameFromGitHubUrl(url) {
+  const raw = String(url || '').trim();
+  if (!raw) {
+    return null;
+  }
+
+  const match = raw.match(/github\.com\/([^\/]+)\/([^\/?#]+)/i);
+  if (!match) {
+    return null;
+  }
+
+  return (match[1] + '/' + match[2]).toLowerCase();
+}
+
 
 async function findAutoCloseTasksForMergedPr({ branchName, repoFullName, compareCandidates, prUrl }) {
   const branch = String(branchName || '').trim();
@@ -442,6 +495,105 @@ async function findAutoCloseTasksForMergedPr({ branchName, repoFullName, compare
     id: row.id,
     projectId: row.project_id
   }));
+}
+
+async function findTasksForPullRequest({ repoFullName, headRef, prNumber, prUrl }) {
+  const repo = String(repoFullName || '').trim().toLowerCase();
+  const branch = String(headRef || '').trim();
+  const number = Number.isFinite(Number(prNumber)) ? Number(prNumber) : null;
+  const prUrlValue = String(prUrl || '').trim().toLowerCase();
+
+  const result = await query(
+    `SELECT DISTINCT t.id, t.project_id
+       FROM tasks t
+       LEFT JOIN task_links_github g ON g.task_id = t.id
+      WHERE (
+        ($1 <> '' AND LOWER(COALESCE(g.repo_full_name, '')) = $1 AND ($2::int IS NOT NULL AND g.pr_number = $2))
+        OR ($1 <> '' AND LOWER(COALESCE(g.repo_full_name, '')) = $1 AND $3 <> '' AND LOWER(COALESCE(g.branch_name, '')) = LOWER($3))
+        OR ($3 <> '' AND LOWER(COALESCE(t.branch_name, '')) = LOWER($3))
+        OR ($4 <> '' AND LOWER(COALESCE(g.pr_url, '')) = $4)
+        OR ($4 <> '' AND LOWER(COALESCE(t.pr_url, '')) = $4)
+      )
+      ORDER BY t.updated_at DESC
+      LIMIT 300`,
+    [repo, number, branch, prUrlValue]
+  );
+
+  return result.rows.map((row) => ({ id: row.id, projectId: row.project_id }));
+}
+
+async function syncTaskStatusFromPullRequest(req, payload) {
+  const pullRequest = payload?.pull_request || {};
+  const repoFullName = String(
+    pullRequest?.base?.repo?.full_name || payload?.repository?.full_name || ''
+  ).trim().toLowerCase();
+  const headRef = String(pullRequest?.head?.ref || '').trim();
+  const prUrl = String(pullRequest?.html_url || '').trim();
+  const prNumber = pullRequest?.number;
+  const prState = pullRequest?.merged ? 'merged' : String(pullRequest?.state || 'open').trim().toLowerCase();
+
+  if (!repoFullName && !headRef && !prUrl) {
+    return { matched: 0, updated: 0 };
+  }
+
+  const candidates = await findTasksForPullRequest({
+    repoFullName,
+    headRef,
+    prNumber,
+    prUrl
+  });
+
+  let updated = 0;
+  for (const candidate of candidates) {
+    if (repoFullName) {
+      await taskServiceV2.linkGitHub({
+        taskId: candidate.id,
+        repoFullName,
+        branchName: headRef || null,
+        prNumber: prNumber || null,
+        prUrl: prUrl || null,
+        prState
+      });
+    }
+
+    const before = await getTaskById(candidate.projectId, candidate.id);
+    const next = await taskServiceV2.setStatusFromGitHub({
+      taskId: candidate.id,
+      projectId: candidate.projectId,
+      prState,
+      prUrl: prUrl || null
+    });
+
+    if (before && next && before.status !== next.status) {
+      updated += 1;
+      const warning = await postStatusToSlack(next);
+      if (warning) {
+        log('error', 'slack_status_post_failed', {
+          requestId: req.requestId,
+          taskId: next.id,
+          warning
+        });
+      }
+
+      await safeRecordTaskEvent(req, {
+        projectId: candidate.projectId,
+        taskId: next.id,
+        actorUserId: null,
+        actorLabel: 'github-webhook',
+        eventType: 'task.status_synced_from_github',
+        summary: 'Status synced from GitHub PR state',
+        metadata: {
+          prState,
+          pullRequestUrl: prUrl || null,
+          repository: repoFullName || null,
+          branch: headRef || null,
+          prNumber: prNumber || null
+        }
+      });
+    }
+  }
+
+  return { matched: candidates.length, updated };
 }
 
 async function autoCloseTasksForMergedPullRequest(req, payload) {
@@ -719,6 +871,30 @@ async function ingestSlackTask(projectId, payload, appBaseUrl) {
   const assigneeId = mapped?.login || fallbackAssignee;
   const assignedToUserId = mapped?.userId || null;
 
+  const canUseSlackThreadIdentity =
+    isTasksDualWriteEnabled() &&
+    String(payload.team_id || '').trim() &&
+    String(payload.channel_id || '').trim() &&
+    String(payload.thread_ts || '').trim();
+
+  if (canUseSlackThreadIdentity) {
+    const existingTask = await getTaskBySlackThread(
+      projectId,
+      String(payload.team_id || '').trim(),
+      String(payload.channel_id || '').trim(),
+      String(payload.thread_ts || '').trim()
+    );
+
+    if (existingTask) {
+      return {
+        ok: true,
+        response_type: 'in_channel',
+        task: existingTask,
+        text: 'Task already exists for this Slack thread: ' + existingTask.title
+      };
+    }
+  }
+
   const task = await createTask({
     projectId,
     assignee_id: assigneeId,
@@ -740,6 +916,16 @@ async function ingestSlackTask(projectId, payload, appBaseUrl) {
     status: 'todo',
     title: parsed.title
   });
+
+  if (isTasksDualWriteEnabled() && payload.team_id && payload.channel_id && payload.thread_ts) {
+    await taskServiceV2.linkSlackThread({
+      taskId: task.id,
+      slackTeamId: payload.team_id,
+      slackChannelId: payload.channel_id,
+      slackThreadTs: payload.thread_ts,
+      slackMessageTs: payload.message_ts || null
+    });
+  }
 
   await touchSlackProjectEvent(projectId, payload.team_id || null, payload.channel_id || null);
 
@@ -1129,6 +1315,186 @@ function createApp() {
 
   app.get('/me', requireAuth, async (req, res) => {
     res.json(req.user);
+  });
+
+  app.get('/api/capabilities', requireAuth, async (_req, res) => {
+    return res.json({
+      relayNativeTasks: true,
+      readV2: isTasksReadV2Enabled(),
+      dualWrite: isTasksDualWriteEnabled()
+    });
+  });
+
+  app.get('/api/tasks', requireAuth, async (req, res, next) => {
+    try {
+      const projectId = String(req.query.workspace_id || req.query.workspaceId || req.query.project_id || req.query.projectId || '').trim();
+      if (!projectId) {
+        return res.status(400).json({ error: 'workspace_id is required' });
+      }
+
+      const member = await isProjectMember(projectId, req.user.userId);
+      if (!member) {
+        return res.status(403).json({ error: 'Not a project member' });
+      }
+
+      const assigned = String(req.query.assigned || 'me').trim().toLowerCase();
+      const options = assigned === 'all' ? {} : { assignedToUserId: req.user.userId };
+      const tasks = await listTasksCompat(projectId, options);
+      const filtered = applyTaskFilters(tasks, {
+        status: req.query.status,
+        assignee: req.query.assignee
+      });
+      return res.json({ tasks: filtered });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.get('/api/tasks/:id', requireAuth, async (req, res, next) => {
+    try {
+      const taskId = String(req.params.id || '').trim();
+      const projectId = String(req.query.workspace_id || req.query.workspaceId || req.query.project_id || req.query.projectId || '').trim();
+      if (!projectId) {
+        return res.status(400).json({ error: 'workspace_id is required' });
+      }
+
+      const member = await isProjectMember(projectId, req.user.userId);
+      if (!member) {
+        return res.status(403).json({ error: 'Not a project member' });
+      }
+
+      const task = await getTaskByIdCompat(projectId, taskId);
+      if (!task) {
+        return res.status(404).json({ error: 'Task not found' });
+      }
+
+      return res.json({ task });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post('/api/tasks', requireAuth, async (req, res, next) => {
+    try {
+      const body = req.body || {};
+      const projectId = String(body.workspaceId || body.workspace_id || body.projectId || body.project_id || '').trim();
+      if (!projectId) {
+        return res.status(400).json({ error: 'workspaceId is required' });
+      }
+
+      const member = await isProjectMember(projectId, req.user.userId);
+      if (!member) {
+        return res.status(403).json({ error: 'Not a project member' });
+      }
+
+      const title = String(body.title || '').trim();
+      if (!title) {
+        return res.status(400).json({ error: 'title is required' });
+      }
+
+      const task = await taskServiceV2.createTask({
+        projectId,
+        assignee_id: String(body.assignee_id || '').trim() || null,
+        assignedToUserId: String(body.assignedToUserId || '').trim() || null,
+        pendingSlackAssignee: null,
+        createdByUserId: req.user.userId,
+        updatedByUserId: req.user.userId,
+        description: String(body.description || '').trim() || title,
+        dueDate: body.dueDate || null,
+        linkedFiles: Array.isArray(body.linkedFiles) ? body.linkedFiles : [],
+        priority: String(body.priority || 'normal').trim().toLowerCase(),
+        source: String(body.source || 'api').trim().toLowerCase(),
+        status: String(body.status || 'todo').trim().toLowerCase(),
+        title
+      });
+
+      return res.status(201).json({ ok: true, task });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post('/api/tasks/:id/start', requireAuth, async (req, res, next) => {
+    try {
+      const taskId = String(req.params.id || '').trim();
+      const body = req.body || {};
+      const projectId = String(body.workspaceId || body.workspace_id || body.projectId || body.project_id || '').trim();
+      if (!projectId) {
+        return res.status(400).json({ error: 'workspaceId is required' });
+      }
+
+      const member = await isProjectMember(projectId, req.user.userId);
+      if (!member) {
+        return res.status(403).json({ error: 'Not a project member' });
+      }
+
+      const before = await getTaskByIdCompat(projectId, taskId);
+      if (!before) {
+        return res.status(404).json({ error: 'Task not found' });
+      }
+
+      const patch = {
+        status: before.status === 'done' ? 'done' : 'in_progress',
+        updatedByUserId: req.user.userId,
+        branchName: body.branchName !== undefined ? body.branchName : before.branchName
+      };
+      const task = await patchTask(projectId, taskId, patch);
+
+      const repoFullName = String(body.repoFullName || '').trim();
+      if (repoFullName) {
+        await taskServiceV2.linkGitHub({
+          taskId,
+          repoFullName,
+          branchName: String(patch.branchName || '').trim() || null,
+          prState: null,
+          prUrl: body.prUrl || null
+        });
+      }
+
+      return res.json({ ok: true, task: await getTaskByIdCompat(projectId, taskId) || task });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post('/api/tasks/:id/link/slack', requireAuth, async (req, res, next) => {
+    try {
+      const taskId = String(req.params.id || '').trim();
+      const body = req.body || {};
+      const projectId = String(body.workspaceId || body.workspace_id || body.projectId || body.project_id || '').trim();
+      if (!projectId) {
+        return res.status(400).json({ error: 'workspaceId is required' });
+      }
+
+      const member = await isProjectMember(projectId, req.user.userId);
+      if (!member) {
+        return res.status(403).json({ error: 'Not a project member' });
+      }
+
+      const task = await getTaskByIdCompat(projectId, taskId);
+      if (!task) {
+        return res.status(404).json({ error: 'Task not found' });
+      }
+
+      const slackTeamId = String(body.slackTeamId || body.slack_team_id || '').trim();
+      const slackChannelId = String(body.slackChannelId || body.slack_channel_id || '').trim();
+      const slackThreadTs = String(body.slackThreadTs || body.slack_thread_ts || '').trim();
+      if (!slackTeamId || !slackChannelId || !slackThreadTs) {
+        return res.status(400).json({ error: 'slackTeamId, slackChannelId and slackThreadTs are required' });
+      }
+
+      const link = await taskServiceV2.linkSlackThread({
+        taskId,
+        slackTeamId,
+        slackChannelId,
+        slackThreadTs,
+        slackMessageTs: String(body.slackMessageTs || body.slack_message_ts || '').trim() || null
+      });
+
+      return res.json({ ok: true, link, task: await getTaskByIdCompat(projectId, taskId) });
+    } catch (error) {
+      return next(error);
+    }
   });
 
   // Admin key endpoints (for ops and bootstrapping)
@@ -1718,8 +2084,11 @@ function createApp() {
         return res.status(200).json({ ok: true, ignored: event || 'unknown_event' });
       }
 
+      const sync = isTasksDualWriteEnabled()
+        ? await syncTaskStatusFromPullRequest(req, req.body || {})
+        : { matched: 0, updated: 0, ignored: 'dual_write_disabled' };
       const result = await autoCloseTasksForMergedPullRequest(req, req.body || {});
-      return res.status(200).json({ ok: true, event, ...result });
+      return res.status(200).json({ ok: true, event, synced: sync, autoClose: result });
     } catch (error) {
       return next(error);
     }
@@ -1730,11 +2099,11 @@ function createApp() {
       const assigned = String(req.query.assigned || 'me').trim().toLowerCase();
 
       if (assigned === 'all') {
-        const tasks = await listTasks(req.projectId, {});
+        const tasks = await listTasksCompat(req.projectId, {});
         return res.json({ tasks });
       }
 
-      const tasks = await listTasks(req.projectId, { assignedToUserId: req.user.userId });
+      const tasks = await listTasksCompat(req.projectId, { assignedToUserId: req.user.userId });
       return res.json({ tasks });
     } catch (error) {
       return next(error);
@@ -1805,7 +2174,7 @@ function createApp() {
   app.get('/projects/:projectId/tasks/:taskId', requireAuth, requireProjectMembership, async (req, res, next) => {
     try {
       const taskId = String(req.params.taskId || '').trim();
-      const task = await getTaskById(req.projectId, taskId);
+      const task = await getTaskByIdCompat(req.projectId, taskId);
       if (!task) {
         return res.status(404).json({ error: 'Task not found' });
       }
@@ -1819,7 +2188,7 @@ function createApp() {
   app.get('/projects/:projectId/tasks/:taskId/events', requireAuth, requireProjectMembership, async (req, res, next) => {
     try {
       const taskId = String(req.params.taskId || '').trim();
-      const task = await getTaskById(req.projectId, taskId);
+      const task = await getTaskByIdCompat(req.projectId, taskId);
       if (!task) {
         return res.status(404).json({ error: 'Task not found' });
       }
@@ -1835,7 +2204,7 @@ function createApp() {
   app.patch('/projects/:projectId/tasks/:taskId', requireAuth, requireProjectMembership, async (req, res, next) => {
     try {
       const taskId = String(req.params.taskId || '').trim();
-      const before = await getTaskById(req.projectId, taskId);
+      const before = await getTaskByIdCompat(req.projectId, taskId);
       if (!before) {
         return res.status(404).json({ error: 'Task not found' });
       }
@@ -1890,51 +2259,70 @@ function createApp() {
       if (!task) {
         return res.status(404).json({ error: 'Task not found' });
       }
+      const responseTask = (await getTaskByIdCompat(req.projectId, taskId)) || task;
+
+      if (isTasksDualWriteEnabled()) {
+        const repoFromPatch = String(body.repoFullName || '').trim().toLowerCase();
+        const inferredRepo =
+          repoFromPatch ||
+          extractRepoFullNameFromGitHubUrl(responseTask.prUrl) ||
+          extractRepoFullNameFromGitHubUrl(body.prUrl);
+
+        if (inferredRepo && (responseTask.branchName || responseTask.prUrl)) {
+          await taskServiceV2.linkGitHub({
+            taskId: responseTask.id,
+            repoFullName: inferredRepo,
+            branchName: responseTask.branchName || null,
+            prUrl: responseTask.prUrl || null,
+            prState: responseTask.status === 'done' ? 'merged' : responseTask.status === 'review' ? 'open' : null
+          });
+        }
+      }
 
       let warning;
-      if (allowed.status && before.status !== task.status) {
-        warning = await postStatusToSlack(task);
+      if (allowed.status && before.status !== responseTask.status) {
+        warning = await postStatusToSlack(responseTask);
         if (warning) {
           log('error', 'slack_status_post_failed', {
             requestId: req.requestId,
-            taskId: task.id,
+            taskId: responseTask.id,
             warning
           });
         }
       }
 
       const eventsToRecord = [];
-      if (before.status !== task.status) {
+      if (before.status !== responseTask.status) {
         eventsToRecord.push({
           eventType: 'task.status_changed',
-          summary: `Status changed to ${formatStatus(task.status)}`,
+          summary: `Status changed to ${formatStatus(responseTask.status)}`,
           metadata: {
             before: before.status,
-            after: task.status
+            after: responseTask.status
           }
         });
       }
 
-      if (before.assignedToUserId !== task.assignedToUserId || before.assignee_id !== task.assignee_id) {
+      if (before.assignedToUserId !== responseTask.assignedToUserId || before.assignee_id !== responseTask.assignee_id) {
         eventsToRecord.push({
           eventType: 'task.assigned',
-          summary: task.assignee_id ? `Assigned to @${task.assignee_id}` : 'Unassigned task',
+          summary: responseTask.assignee_id ? `Assigned to @${responseTask.assignee_id}` : 'Unassigned task',
           metadata: {
             beforeAssignedToUserId: before.assignedToUserId || null,
-            afterAssignedToUserId: task.assignedToUserId || null,
+            afterAssignedToUserId: responseTask.assignedToUserId || null,
             beforeAssignee: before.assignee_id || null,
-            afterAssignee: task.assignee_id || null
+            afterAssignee: responseTask.assignee_id || null
           }
         });
       }
 
-      if (before.title !== task.title || before.description !== task.description) {
+      if (before.title !== responseTask.title || before.description !== responseTask.description) {
         eventsToRecord.push({
           eventType: 'task.updated',
           summary: 'Task details updated',
           metadata: {
-            titleChanged: before.title !== task.title,
-            descriptionChanged: before.description !== task.description
+            titleChanged: before.title !== responseTask.title,
+            descriptionChanged: before.description !== responseTask.description
           }
         });
       }
@@ -1951,7 +2339,7 @@ function createApp() {
         });
       }
 
-      return res.json({ ok: true, task, warning: warning || undefined });
+      return res.json({ ok: true, task: responseTask, warning: warning || undefined });
     } catch (error) {
       return next(error);
     }
@@ -1989,7 +2377,8 @@ function createApp() {
         }
       });
 
-      return res.json({ ok: true, task });
+      const responseTask = (await getTaskByIdCompat(req.projectId, taskId)) || task;
+      return res.json({ ok: true, task: responseTask });
     } catch (error) {
       return next(error);
     }

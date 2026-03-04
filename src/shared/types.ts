@@ -71,3 +71,9 @@ export interface TaskDetailResponse {
   task: Task;
   warning?: string;
 }
+
+export interface RelayCapabilities {
+  relayNativeTasks: boolean;
+  readV2?: boolean;
+  dualWrite?: boolean;
+}

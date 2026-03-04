@@ -109,3 +109,17 @@ export async function relayAdminPost(pathname: string, adminApiKey: string, body
   }
   return data;
 }
+
+export async function relayGetCapabilities(token: string): Promise<{ relayNativeTasks: boolean; readV2: boolean; dualWrite: boolean }> {
+  const response = await relayFetch('/api/capabilities', { token });
+  const data = await parseJsonSafe(response);
+  if (!response.ok) {
+    throw new Error(`GET /api/capabilities failed: ${response.status} ${JSON.stringify(data)}`);
+  }
+
+  return {
+    relayNativeTasks: Boolean(data?.relayNativeTasks),
+    readV2: Boolean(data?.readV2),
+    dualWrite: Boolean(data?.dualWrite)
+  };
+}

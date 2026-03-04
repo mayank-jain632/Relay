@@ -246,3 +246,48 @@ Optional but recommended:
 
 After any env update, redeploy both services.
 
+
+## 10) Relay-Native Task Migration (Expand -> Dual-write -> Switch-read -> Contract)
+
+This repo now supports phased migration from Slack-centric task identity to Relay-native task identity.
+
+### Feature flags
+- `TASKS_DUAL_WRITE` (default `false`):
+  - When `true`, Slack task ingestion/webhooks also upsert into:
+    - `task_links_slack`
+    - `task_links_github`
+    - `task_events_v2`
+- `TASKS_READ_V2` (default `false`):
+  - When `true`, task list/detail reads use V2 link overlays while keeping existing response shape.
+
+### Migrations
+Applied by `npm run db:migrate` via `initSchema()`:
+1. `server/sql/init.sql`
+2. `server/sql/migrations/*.sql` (sorted)
+3. Compatibility migrations in `server/lib/db.js`
+
+### Backfill
+One-time idempotent backfill script:
+```bash
+node server/scripts/backfill-relay-native-tasks.js --dry-run
+node server/scripts/backfill-relay-native-tasks.js
+```
+Options:
+- `--workspace=<projectId>`
+- `--limit=<n>`
+
+### Rollout sequence
+1. Deploy with `TASKS_DUAL_WRITE=false`, `TASKS_READ_V2=false`.
+2. Run migrations.
+3. Enable `TASKS_DUAL_WRITE=true`.
+4. Run backfill dry-run, then backfill.
+5. Validate parity in dashboard + extension.
+6. Enable `TASKS_READ_V2=true` for pilot traffic.
+7. Roll to full traffic once stable.
+
+### Rollback
+1. Set `TASKS_READ_V2=false`.
+2. Set `TASKS_DUAL_WRITE=false`.
+3. Redeploy API.
+
+No table drops are required for rollback; all migrations are additive.
