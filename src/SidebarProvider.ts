@@ -1,12 +1,13 @@
 import * as vscode from 'vscode';
-import { RelayUser, Task } from './shared/types';
+import { ProjectSummary, RelayUser, Task } from './shared/types';
 
 type SidebarScope = 'my' | 'all';
 
 interface SidebarMessage {
-  type: 'openTask' | 'signIn' | 'setScope';
+  type: 'openTask' | 'signIn' | 'setScope' | 'setProject';
   taskId?: string;
   scope?: SidebarScope;
+  projectId?: string;
 }
 
 interface SidebarViewState {
@@ -16,6 +17,8 @@ interface SidebarViewState {
   loginInProgress: boolean;
   authRequired: boolean;
   projectId?: string;
+  projectName?: string;
+  availableProjects?: ProjectSummary[];
 }
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
@@ -25,11 +28,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private onOpenTask?: (taskId: string) => void;
   private onSignIn?: () => void;
   private onSetScope?: (scope: SidebarScope) => void;
+  private onSetProject?: (projectId: string) => void;
   private state: SidebarViewState = {
     tasks: [],
     scope: 'all',
     loginInProgress: false,
-    authRequired: false
+    authRequired: false,
+    availableProjects: []
   };
 
   setOnOpenTask(handler: (taskId: string) => void): void {
@@ -42,6 +47,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   setOnSetScope(handler: (scope: SidebarScope) => void): void {
     this.onSetScope = handler;
+  }
+
+  setOnSetProject(handler: (projectId: string) => void): void {
+    this.onSetProject = handler;
   }
 
   resolveWebviewView(view: vscode.WebviewView): void {
@@ -62,6 +71,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
       if (message.type === 'setScope' && message.scope && this.onSetScope) {
         this.onSetScope(message.scope);
+        return;
+      }
+
+      if (message.type === 'setProject' && message.projectId && this.onSetProject) {
+        this.onSetProject(message.projectId);
       }
     });
 
@@ -81,10 +95,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     this.postState();
   }
 
-  updateProject(projectId: string | undefined): void {
+  updateProject(context: {
+    projectId?: string;
+    projectName?: string;
+    availableProjects?: ProjectSummary[];
+  }): void {
     this.state = {
       ...this.state,
-      projectId
+      ...context,
+      availableProjects: context.availableProjects ?? this.state.availableProjects ?? []
     };
     this.postState();
   }
@@ -128,6 +147,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     .sub { color: var(--muted); font-size: 10px; margin-top: 4px; }
     .btn { border: 1px solid #2f9c90; background: #214741; color: #d6fff8; border-radius: 6px; padding: 4px 8px; font-size: 11px; cursor: pointer; }
     .btn:disabled { opacity: 0.6; cursor: default; }
+    .project-block { margin-top: 8px; }
+    .project-title { font-size: 11px; font-weight: 600; }
+    .project-select {
+      width: 100%;
+      margin-top: 6px;
+      border: 1px solid var(--border);
+      background: #1f2937;
+      color: var(--ink);
+      border-radius: 6px;
+      font-size: 11px;
+      padding: 5px 6px;
+    }
     .filter { display: flex; gap: 6px; margin-top: 8px; }
     .filter button { flex: 1; border: 1px solid var(--border); background: #1f2937; color: var(--ink); border-radius: 6px; font-size: 11px; padding: 5px 6px; cursor: pointer; }
     .filter button.active { border-color: var(--accent); color: #e6fff8; }
@@ -162,7 +193,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 <body>
   <section class="header">
     <div id="auth"></div>
-    <div id="project" class="sub" style="margin-top:8px"></div>
+    <div id="project" class="project-block"></div>
     <div class="filter">
       <button id="scopeMy">My Tasks</button>
       <button id="scopeAll">All Tasks</button>
@@ -230,12 +261,46 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     function renderProject(state) {
       const projectId = String(state.projectId || '').trim();
+      const projectName = String(state.projectName || '').trim();
+      const projects = Array.isArray(state.availableProjects) ? state.availableProjects : [];
+
       if (!projectId) {
-        projectNode.textContent = 'Project: not linked';
+        projectNode.innerHTML = '<div class="project-title">Project: not linked</div>';
         return;
       }
 
-      projectNode.textContent = 'Project: ' + projectId;
+      if (projects.length > 1) {
+        projectNode.innerHTML = [
+          '<div class="project-title">Project</div>',
+          '<select id="projectSelect" class="project-select">',
+          projects.map((project) => {
+            const id = String(project.id || '');
+            const name = String(project.name || project.id || '');
+            const selected = id === projectId ? ' selected' : '';
+            return '<option value="' + escapeHtml(id) + '"' + selected + '>' + escapeHtml(name) + '</option>';
+          }).join(''),
+          '</select>',
+          '<div class="sub">ID: ' + escapeHtml(projectId) + '</div>'
+        ].join('');
+
+        const selector = document.getElementById('projectSelect');
+        if (selector) {
+          selector.addEventListener('change', (event) => {
+            const next = String(event.target && event.target.value ? event.target.value : '').trim();
+            if (!next || next === projectId) {
+              return;
+            }
+            vscode.postMessage({ type: 'setProject', projectId: next });
+          });
+        }
+
+        return;
+      }
+
+      projectNode.innerHTML = [
+        '<div class="project-title">Project: ' + escapeHtml(projectName || projectId) + '</div>',
+        '<div class="sub">ID: ' + escapeHtml(projectId) + '</div>'
+      ].join('');
     }
 
     function renderTasks(tasks) {

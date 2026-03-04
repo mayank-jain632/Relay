@@ -1,4 +1,4 @@
-import { RelayUser, Task, TaskDetailResponse, TaskListResponse } from '../shared/types';
+import { ProjectSummary, RelayUser, Task, TaskDetailResponse, TaskListResponse } from '../shared/types';
 import { GitCommit } from '../git/git';
 
 export interface ApiContext {
@@ -148,6 +148,16 @@ export async function fetchMe(): Promise<RelayUser> {
   }
 
   return (await response.json()) as RelayUser;
+}
+
+export async function fetchProjects(): Promise<ProjectSummary[]> {
+  const response = await authFetch('/projects');
+  if (!response.ok) {
+    throw new Error(`Project fetch failed: ${response.status}`);
+  }
+
+  const data = (await response.json()) as { projects?: ProjectSummary[] };
+  return Array.isArray(data?.projects) ? data.projects : [];
 }
 
 export async function verifyPairCode(apiBaseUrl: string, code: string): Promise<PairVerifyResponse> {

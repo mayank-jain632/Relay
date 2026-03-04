@@ -1,13 +1,14 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { SidebarProvider } from './SidebarProvider';
-import { RelayUser, Task } from './shared/types';
+import { ProjectSummary, RelayUser, Task } from './shared/types';
 import { getWorkspaceRelativePath, normalizeFilePath, prioritizeByFile, sortByOrder } from './shared/taskUtils';
 import { TaskDetailPanel } from './TaskDetailPanel';
 import {
   addTaskCommit,
   clearApiContext,
   fetchMe,
+  fetchProjects,
   fetchTaskList,
   getTaskById,
   getApiContext,
@@ -50,6 +51,9 @@ let authUser: RelayUser | undefined;
 let taskScope: 'my' | 'all' = 'all';
 let configReady = false;
 let lastSyncAt: string | undefined;
+let availableProjects: ProjectSummary[] = [];
+let currentProjectName: string | undefined;
+let projectSwitchInProgress = false;
 
 const SESSION_TOKEN_KEY = 'relay.sessionToken.v1';
 const LEGACY_SESSION_TOKEN_KEY = 'contexthud.sessionToken.v1';
@@ -91,6 +95,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void loadRepoConfig(sidebar, { interactive: false }).then(async () => {
         updateSidebarProjectContext(sidebar);
         await refreshAuthState(context, sidebar);
+        await refreshProjectDirectory(sidebar);
         await refreshTasks(sidebar, { interactive: false });
       });
     })
@@ -127,6 +132,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void setTaskScope(scope, sidebar);
   });
 
+  sidebar.setOnSetProject((projectId) => {
+    void switchProject(projectId, sidebar);
+  });
+
   context.subscriptions.push(
     vscode.commands.registerCommand('contexthud.refresh', async () => {
       await refreshTasks(sidebar, { interactive: true });
@@ -140,6 +149,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         setApiContext({ apiBaseUrl: config.apiBaseUrl, projectId: config.projectId });
         configReady = true;
         updateSidebarProjectContext(sidebar);
+        await refreshProjectDirectory(sidebar);
         refreshBackoffMs = 5000;
         void vscode.window.showInformationMessage(`Relay initialized for project ${config.projectId}.`);
         await refreshTasks(sidebar, { interactive: true });
@@ -259,7 +269,9 @@ async function loadRepoConfig(sidebar: SidebarProvider, options: { interactive: 
     clearApiContext();
     currentTasks = [];
     sidebar.updateTasks([]);
-    sidebar.updateProject(undefined);
+    availableProjects = [];
+    currentProjectName = undefined;
+    sidebar.updateProject({ projectId: undefined, projectName: undefined, availableProjects: [] });
     if (options.interactive) {
       const action = 'Initialize Relay for this repo';
       const selected = await vscode.window.showWarningMessage(
@@ -280,7 +292,72 @@ async function loadRepoConfig(sidebar: SidebarProvider, options: { interactive: 
 
 function updateSidebarProjectContext(sidebar: SidebarProvider): void {
   const context = getApiContext();
-  sidebar.updateProject(context?.projectId);
+  const projectId = context?.projectId;
+  currentProjectName = availableProjects.find((project) => project.id === projectId)?.name;
+  sidebar.updateProject({
+    projectId,
+    projectName: currentProjectName,
+    availableProjects
+  });
+}
+
+async function refreshProjectDirectory(sidebar: SidebarProvider): Promise<void> {
+  if (!configReady || !authUser) {
+    availableProjects = [];
+    currentProjectName = undefined;
+    updateSidebarProjectContext(sidebar);
+    return;
+  }
+
+  try {
+    const projects = await fetchProjects();
+    availableProjects = projects;
+    currentProjectName = projects.find((project) => project.id === getApiContext()?.projectId)?.name;
+    updateSidebarProjectContext(sidebar);
+  } catch {
+    availableProjects = [];
+    currentProjectName = undefined;
+    updateSidebarProjectContext(sidebar);
+  }
+}
+
+async function switchProject(projectId: string, sidebar: SidebarProvider): Promise<void> {
+  const nextProjectId = String(projectId || "").trim();
+  if (!nextProjectId || projectSwitchInProgress) {
+    return;
+  }
+
+  const current = getApiContext();
+  if (!current?.apiBaseUrl) {
+    void vscode.window.showWarningMessage('Relay project config is missing. Link workspace first.');
+    return;
+  }
+
+  if (current.projectId === nextProjectId) {
+    return;
+  }
+
+  projectSwitchInProgress = true;
+  try {
+    const existingConfig = await readRepoConfig();
+    const updated = await writeRepoConfig({
+      apiBaseUrl: current.apiBaseUrl,
+      projectId: nextProjectId,
+      baseBranch: existingConfig?.baseBranch || "main"
+    });
+
+    setApiContext({ apiBaseUrl: updated.apiBaseUrl, projectId: updated.projectId });
+    currentProjectName = availableProjects.find((project) => project.id === updated.projectId)?.name;
+    updateSidebarProjectContext(sidebar);
+    await refreshTasks(sidebar, { interactive: true });
+    void vscode.window.showInformationMessage(
+      currentProjectName ? `Switched to project ${currentProjectName}.` : `Switched to project ${updated.projectId}.`
+    );
+  } catch (error) {
+    void vscode.window.showErrorMessage(`Relay project switch failed: ${String(error)}`);
+  } finally {
+    projectSwitchInProgress = false;
+  }
 }
 
 async function linkWorkspaceByPairCode(sidebar: SidebarProvider): Promise<void> {
@@ -317,6 +394,7 @@ async function linkWorkspaceByPairCode(sidebar: SidebarProvider): Promise<void> 
     configReady = true;
     setApiContext({ apiBaseUrl: config.apiBaseUrl, projectId: config.projectId });
     updateSidebarProjectContext(sidebar);
+    await refreshProjectDirectory(sidebar);
     refreshBackoffMs = 5000;
     void vscode.window.showInformationMessage(`Relay linked to project ${config.projectId}.`);
     await refreshTasks(sidebar, { interactive: true });
@@ -347,6 +425,7 @@ async function refreshAuthState(context: vscode.ExtensionContext, sidebar: Sideb
     const me = await fetchMe();
     authUser = me;
     authRequired = false;
+    await refreshProjectDirectory(sidebar);
     if (taskScope !== 'my') {
       taskScope = 'my';
     }
@@ -357,6 +436,9 @@ async function refreshAuthState(context: vscode.ExtensionContext, sidebar: Sideb
     setAuthToken(undefined);
     await context.secrets.delete(SESSION_TOKEN_KEY);
     await context.secrets.delete(LEGACY_SESSION_TOKEN_KEY);
+    availableProjects = [];
+    currentProjectName = undefined;
+    updateSidebarProjectContext(sidebar);
   }
 
   updateSidebarAuthState(sidebar);
@@ -418,6 +500,7 @@ async function startLoginFlow(context: vscode.ExtensionContext, sidebar: Sidebar
 
     authUser = me;
     authRequired = false;
+    await refreshProjectDirectory(sidebar);
     taskScope = 'my';
     refreshBackoffMs = 5000;
     updateSidebarAuthState(sidebar);

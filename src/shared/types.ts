@@ -52,6 +52,13 @@ export interface Task {
   updatedAt?: string;
 }
 
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  role?: string;
+  createdAt?: string;
+}
+
 export interface UserMapping {
   [slackId: string]: string;
 }
