@@ -1,0 +1,6 @@
+{
+  "relay.currentUser": "Your Name",
+  "relay.userMappingPath": ".relay/users.json",
+  "relay.apiBaseUrl": "https://YOUR-API-DOMAIN",
+  "relay.user.handle": "your-github-login"
+}

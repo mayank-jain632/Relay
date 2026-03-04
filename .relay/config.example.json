@@ -1,0 +1,5 @@
+{
+  "apiBaseUrl": "https://YOUR-API-DOMAIN",
+  "projectId": "YOUR_PROJECT_ID",
+  "baseBranch": "main"
+}

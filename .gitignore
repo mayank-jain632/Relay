@@ -7,3 +7,10 @@ server/data/
 dashboard/node_modules/
 dashboard/.next/
 dashboard/.env
+
+# Local Relay runtime config (do not commit)
+.relay/config.json
+.relay/users.json
+.contexthud/config.json
+.contexthud/users.json
+.vscode/settings.json

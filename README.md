@@ -126,6 +126,13 @@ No manual JSON config copy required.
 - `POST /ingest/slack-nudge/:projectId`
 - `POST /slack/nudge?projectId=<projectId>`
 
+#### /nudge input format
+- Use explicit file prefix to avoid ambiguity: `%path/to/file.ts`
+- If no prefixed file is provided, full text after assignee is treated as task description
+- Examples:
+  - `/nudge @mayank %src/extension.ts Fix refresh bug`
+  - `/nudge @mayank Build xyz`
+
 ### Onboarding endpoints
 - `POST /projects/:projectId/slack/connect`
 - `POST /projects/:projectId/pair-codes`
@@ -177,4 +184,65 @@ Dashboard service (separate Railway service recommended):
 7. Create task from Slack; confirm it appears in dashboard tasks.
 8. Create/update task from dashboard; confirm persisted state.
 9. Open VS Code extension, point to same API/project, verify same tasks load.
- 
+
+## 9) Public Slack App Readiness
+
+Before enabling Slack public distribution, ensure these repo and platform settings are in place.
+
+### Repo hygiene
+- Keep secrets only in env vars.
+- Do not commit local runtime config files:
+  - `.relay/config.json`
+  - `.relay/users.json`
+  - `.contexthud/config.json`
+  - `.contexthud/users.json`
+  - `.vscode/settings.json`
+- Use templates instead:
+  - `.relay/config.example.json`
+  - `.contexthud/config.example.json`
+  - `.contexthud/users.example.json`
+  - `.vscode/settings.example.json`
+
+### Slack app settings (single official Relay app)
+- **OAuth Redirect URL**: `https://<API_DOMAIN>/auth/slack/callback`
+- **Event Request URL**: `https://<API_DOMAIN>/ingest/slack`
+- **Slash Command URL**: `https://<API_DOMAIN>/slack/nudge`
+- Required bot scopes currently used by API:
+  - `commands`
+  - `chat:write`
+  - `app_mentions:read`
+  - `channels:history`
+  - `users:read`
+  - `im:write`
+
+### GitHub OAuth settings
+- In your GitHub OAuth app, set callback URL to:
+  - `https://<API_DOMAIN>/auth/github/callback`
+
+### Railway (API service) env vars
+Set at minimum:
+- `DATABASE_URL`
+- `APP_BASE_URL`
+- `GITHUB_CLIENT_ID`
+- `GITHUB_CLIENT_SECRET`
+- `SESSION_SECRET`
+- `SLACK_CLIENT_ID`
+- `SLACK_CLIENT_SECRET`
+- `SLACK_SIGNING_SECRET`
+- `SLACK_BOT_TOKEN`
+- `ADMIN_API_KEY`
+
+Optional but recommended:
+- `SLACK_REDIRECT_URI` = `https://<API_DOMAIN>/auth/slack/callback`
+- `GITHUB_WEBHOOK_SECRET` (for PR-merge auto-close webhook)
+- `ADMIN_GITHUB_LOGINS`
+
+### Vercel (Dashboard) env vars
+- `RELAY_API_BASE_URL` = `https://<API_DOMAIN>`
+- `NEXT_PUBLIC_API_BASE_URL` = `https://<API_DOMAIN>`
+- `DASHBOARD_BASE_URL` = `https://<DASHBOARD_DOMAIN>`
+- `DASHBOARD_SESSION_SECRET`
+- `DASHBOARD_ADMIN_API_KEY` (if project creation is admin-guarded)
+
+After any env update, redeploy both services.
+
