@@ -21,12 +21,22 @@ test('parseSlackTaskText parses tags and file hints', () => {
   assert.equal(parsed.title, 'Fix login redirect on Safari');
 });
 
-test('parseNudgeInput parses user, filePath, and description', () => {
-  const parsed = parseNudgeInput('<@U999> src/extension.ts implement private filter');
+test('parseNudgeInput parses user, explicit %filePath, and description', () => {
+  const parsed = parseNudgeInput('<@U999> %src/extension.ts implement private filter');
 
   assert.deepEqual(parsed, {
     slackUserId: 'U999',
     filePath: 'src/extension.ts',
     description: 'implement private filter'
+  });
+});
+
+test('parseNudgeInput keeps first word in description when no explicit file path prefix exists', () => {
+  const parsed = parseNudgeInput('@mayank Build xyz');
+
+  assert.deepEqual(parsed, {
+    slackUserId: 'mayank',
+    filePath: undefined,
+    description: 'Build xyz'
   });
 });

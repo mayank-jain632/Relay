@@ -1638,7 +1638,8 @@ function createApp() {
   app.post('/ingest/slack-nudge/:projectId', async (req, res) => {
     try {
       const parsed = parseNudgeInput(req.body.text || '');
-      const syntheticText = `@${parsed.slackUserId} [task] ${parsed.description} file:${parsed.filePath}`;
+      const fileHint = parsed.filePath ? ` file:${parsed.filePath}` : '';
+      const syntheticText = `@${parsed.slackUserId} [task] ${parsed.description}${fileHint}`;
       const projectId = String(req.params.projectId || '').trim();
       return handleSlackIngest(req, res, projectId || null, syntheticText);
     } catch (error) {
@@ -1649,7 +1650,8 @@ function createApp() {
   app.post('/slack/nudge', async (req, res) => {
     try {
       const parsed = parseNudgeInput(req.body.text || '');
-      const syntheticText = `@${parsed.slackUserId} [task] ${parsed.description} file:${parsed.filePath}`;
+      const fileHint = parsed.filePath ? ` file:${parsed.filePath}` : '';
+      const syntheticText = `@${parsed.slackUserId} [task] ${parsed.description}${fileHint}`;
       const queryProjectId = String(req.query.projectId || '').trim() || null;
       return handleSlackIngest(req, res, queryProjectId, syntheticText);
     } catch (error) {

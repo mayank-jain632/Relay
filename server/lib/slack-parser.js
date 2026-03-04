@@ -81,9 +81,9 @@ function parseSlackTaskText(text) {
 
 function parseNudgeInput(text) {
   const normalized = String(text || '').trim();
-  const parts = normalized.split(/\s+/);
-  if (parts.length < 3) {
-    throw new Error('Invalid nudge format. Expected: @user [file_path] [requirement]');
+  const parts = normalized.split(/\s+/).filter(Boolean);
+  if (parts.length < 2) {
+    throw new Error('Invalid nudge format. Expected: @user [%file_path] requirement');
   }
 
   const slackUserId = extractSlackUserId(parts[0]);
@@ -91,9 +91,26 @@ function parseNudgeInput(text) {
     throw new Error(`Cannot parse Slack user from token: ${parts[0]}`);
   }
 
+  const maybeFileToken = String(parts[1] || '').trim();
+  let filePath;
+  let descriptionStartIndex = 1;
+
+  if (/^(?:[%$]).+/.test(maybeFileToken)) {
+    filePath = maybeFileToken.slice(1).trim();
+    descriptionStartIndex = 2;
+  } else if (/^file:.+/i.test(maybeFileToken)) {
+    filePath = maybeFileToken.slice(5).trim();
+    descriptionStartIndex = 2;
+  }
+
+  const description = parts.slice(descriptionStartIndex).join(' ').trim();
+  if (!description) {
+    throw new Error('Task requirement is empty. Expected: @user [%file_path] requirement');
+  }
+
   return {
-    description: parts.slice(2).join(' ').trim(),
-    filePath: parts[1],
+    description,
+    filePath: filePath || undefined,
     slackUserId
   };
 }
