@@ -707,7 +707,15 @@ async function ingestSlackTask(projectId, payload, appBaseUrl) {
     (await resolveMappedUserBySlackId(projectId, parsed.assigneeRef)) ||
     (await resolveMappedUserBySlackId(projectId, payload.user_id));
 
-  const fallbackAssignee = resolveAssignee(parsed.assigneeRef) || parsed.assigneeRef;
+  let fallbackAssignee = resolveAssignee(parsed.assigneeRef) || parsed.assigneeRef;
+  if (!mapped && isLikelySlackUserId(parsed.assigneeRef)) {
+    const slackProfile = await fetchSlackUserProfile(payload.team_id || null, parsed.assigneeRef);
+    if (slackProfile?.handle) {
+      fallbackAssignee = slackProfile.handle;
+    } else if (slackProfile?.displayName) {
+      fallbackAssignee = slackProfile.displayName;
+    }
+  }
   const assigneeId = mapped?.login || fallbackAssignee;
   const assignedToUserId = mapped?.userId || null;
 
@@ -837,18 +845,25 @@ function createApp() {
   const appBaseUrl = String(process.env.APP_BASE_URL || `http://localhost:${process.env.PORT || 8787}`).replace(/\/$/, '');
 
   async function resolveProjectIdFromSlackPayload(payload, fallbackProjectId) {
+    const workspaceId = String(payload?.team_id || '').trim();
+    const channelId = String(payload?.channel_id || '').trim();
     const explicit = String(fallbackProjectId || '').trim();
+
+    // Prefer workspace/channel resolution whenever Slack provides workspace context.
+    // This prevents cross-project task ingestion if a stale project-scoped URL is used.
+    if (workspaceId) {
+      const resolved = await resolveProjectIdForSlack(workspaceId, channelId || null);
+      if (resolved) {
+        return resolved;
+      }
+    }
+
+    // Legacy fallback for older integrations that only pass a project-scoped URL.
     if (explicit) {
       return explicit;
     }
 
-    const workspaceId = String(payload?.team_id || '').trim();
-    const channelId = String(payload?.channel_id || '').trim();
-    if (!workspaceId) {
-      return null;
-    }
-
-    return resolveProjectIdForSlack(workspaceId, channelId || null);
+    return null;
   }
 
   async function requireAuth(req, res, next) {
