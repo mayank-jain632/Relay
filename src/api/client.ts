@@ -161,11 +161,17 @@ export async function fetchProjects(): Promise<ProjectSummary[]> {
 }
 
 export async function verifyPairCode(apiBaseUrl: string, code: string): Promise<PairVerifyResponse> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json'
+  };
+
+  if (authToken) {
+    headers.Authorization = `Bearer ${authToken}`;
+  }
+
   const response = await fetch(`${normalizeApiBaseUrl(apiBaseUrl)}/pair/verify`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json'
-    },
+    headers,
     body: JSON.stringify({ code: String(code || '').trim() })
   });
 

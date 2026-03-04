@@ -29,6 +29,7 @@ import {
   getHeadSha,
   getRemoteOriginUrl,
   getRepoRoot,
+  extractGithubRepoFullName,
   readCommit,
   showCommitDiff,
   showTaskDiff
@@ -161,7 +162,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand('contexthud.linkWorkspace', async () => {
-      await linkWorkspaceByPairCode(sidebar);
+      await linkWorkspaceByPairCode(context, sidebar);
     })
   );
 
@@ -360,7 +361,7 @@ async function switchProject(projectId: string, sidebar: SidebarProvider): Promi
   }
 }
 
-async function linkWorkspaceByPairCode(sidebar: SidebarProvider): Promise<void> {
+async function linkWorkspaceByPairCode(context: vscode.ExtensionContext, sidebar: SidebarProvider): Promise<void> {
   const code = await vscode.window.showInputBox({
     title: 'Relay: Link Workspace',
     prompt: 'Paste the pair code from Relay dashboard',
@@ -384,6 +385,7 @@ async function linkWorkspaceByPairCode(sidebar: SidebarProvider): Promise<void> 
   }
 
   try {
+    const previousProjectId = getApiContext()?.projectId || null;
     const linked = await verifyPairCode(apiBaseInput, code);
     const config = await writeRepoConfig({
       apiBaseUrl: linked.apiBaseUrl || apiBaseInput,
@@ -396,7 +398,18 @@ async function linkWorkspaceByPairCode(sidebar: SidebarProvider): Promise<void> 
     updateSidebarProjectContext(sidebar);
     await refreshProjectDirectory(sidebar);
     refreshBackoffMs = 5000;
-    void vscode.window.showInformationMessage(`Relay linked to project ${config.projectId}.`);
+    if (previousProjectId && previousProjectId !== config.projectId) {
+      authUser = undefined;
+      authRequired = true;
+      taskScope = "all";
+      setAuthToken(undefined);
+      await context.secrets.delete(SESSION_TOKEN_KEY);
+      await context.secrets.delete(LEGACY_SESSION_TOKEN_KEY);
+      updateSidebarAuthState(sidebar);
+      void vscode.window.showInformationMessage("Workspace linked. Sign in with GitHub for this project to load My Tasks.");
+    } else {
+      void vscode.window.showInformationMessage(`Relay linked to project ${config.projectId}.`);
+    }
     await refreshTasks(sidebar, { interactive: true });
   } catch (error) {
     void vscode.window.showErrorMessage(`Relay link failed: ${String(error)}`);
@@ -673,9 +686,18 @@ async function startTask(taskId: string): Promise<Task> {
   const branchName = buildBranchName(prefix || 'ch', task.id, task.title || task.description);
 
   const result = await checkoutOrCreateBranch(repoRoot, branchName);
+  let repoFullName: string | null = null;
+  try {
+    const remote = await getRemoteOriginUrl(repoRoot);
+    repoFullName = extractGithubRepoFullName(remote);
+  } catch {
+    repoFullName = null;
+  }
+
   const updated = await patchTaskRequest(taskId, {
     branchName,
-    status: 'in_progress'
+    status: 'in_progress',
+    ...(repoFullName ? { repoFullName } : {})
   });
 
   vscode.window.showInformationMessage(
@@ -713,10 +735,12 @@ async function openPr(taskId: string): Promise<void> {
   }
 
   await vscode.env.openExternal(vscode.Uri.parse(compareUrl));
+  const repoFullName = extractGithubRepoFullName(remote);
   await patchTaskRequest(taskId, {
     prUrl: compareUrl,
     status: 'review',
-    autoCloseOnMerge: true
+    autoCloseOnMerge: true,
+    ...(repoFullName ? { repoFullName } : {})
   });
   vscode.window.showInformationMessage('Opened PR compare view, moved task to review, and enabled auto-close on merge.');
 }

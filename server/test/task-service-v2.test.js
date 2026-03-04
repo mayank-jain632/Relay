@@ -5,7 +5,7 @@ const { mapGitHubPrStateToTaskStatus, pickStatusFromGithubLinks } = require('../
 
 test('mapGitHubPrStateToTaskStatus maps merged/open/closed deterministically', () => {
   assert.equal(mapGitHubPrStateToTaskStatus('merged'), 'done');
-  assert.equal(mapGitHubPrStateToTaskStatus('open'), 'in_review');
+  assert.equal(mapGitHubPrStateToTaskStatus('open'), 'review');
   assert.equal(mapGitHubPrStateToTaskStatus('closed'), 'todo');
   assert.equal(mapGitHubPrStateToTaskStatus('unknown'), null);
 });

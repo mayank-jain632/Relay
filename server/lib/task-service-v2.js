@@ -25,7 +25,7 @@ function mapGitHubPrStateToTaskStatus(prState) {
   }
 
   if (normalized === 'open') {
-    return 'in_review';
+    return 'review';
   }
 
   if (normalized === 'closed') {

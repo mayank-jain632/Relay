@@ -126,6 +126,15 @@ function normalizeGithubRemote(remote: string): { owner: string; repo: string } 
   return null;
 }
 
+export function extractGithubRepoFullName(remote: string): string | null {
+  const parsed = normalizeGithubRemote(remote);
+  if (!parsed) {
+    return null;
+  }
+
+  return `${parsed.owner}/${parsed.repo}`;
+}
+
 export function buildGitHubCompareUrl(remote: string, baseBranch: string, branchName: string): string | null {
   const parsed = normalizeGithubRemote(remote);
   if (!parsed) {

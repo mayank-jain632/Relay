@@ -174,6 +174,29 @@ function isLikelySlackUserId(value) {
   return /^[UW][A-Z0-9]+$/i.test(String(value || '').trim());
 }
 
+function hashCompact(value) {
+  return crypto.createHash('sha256').update(String(value || '')).digest('hex').slice(0, 20);
+}
+
+function buildSlackThreadIdentity(payload) {
+  const threadTs = String(payload?.thread_ts || '').trim();
+  if (threadTs) {
+    return { threadTs, synthetic: false };
+  }
+
+  const messageTs = String(payload?.message_ts || '').trim();
+  if (messageTs) {
+    return { threadTs: `msg:${messageTs}`, synthetic: true };
+  }
+
+  const responseUrl = String(payload?.response_url || '').trim();
+  if (responseUrl) {
+    return { threadTs: `cmd:${hashCompact(responseUrl)}`, synthetic: true };
+  }
+
+  return null;
+}
+
 async function getSlackBotTokenForWorkspace(workspaceId) {
   const workspace = String(workspaceId || '').trim();
   if (workspace) {
@@ -870,19 +893,20 @@ async function ingestSlackTask(projectId, payload, appBaseUrl) {
   }
   const assigneeId = mapped?.login || fallbackAssignee;
   const assignedToUserId = mapped?.userId || null;
+  const slackThreadIdentity = buildSlackThreadIdentity(payload);
 
   const canUseSlackThreadIdentity =
     isTasksDualWriteEnabled() &&
     String(payload.team_id || '').trim() &&
     String(payload.channel_id || '').trim() &&
-    String(payload.thread_ts || '').trim();
+    String(slackThreadIdentity?.threadTs || '').trim();
 
   if (canUseSlackThreadIdentity) {
     const existingTask = await getTaskBySlackThread(
       projectId,
       String(payload.team_id || '').trim(),
       String(payload.channel_id || '').trim(),
-      String(payload.thread_ts || '').trim()
+      String(slackThreadIdentity?.threadTs || '').trim()
     );
 
     if (existingTask) {
@@ -917,12 +941,12 @@ async function ingestSlackTask(projectId, payload, appBaseUrl) {
     title: parsed.title
   });
 
-  if (isTasksDualWriteEnabled() && payload.team_id && payload.channel_id && payload.thread_ts) {
+  if (isTasksDualWriteEnabled() && payload.team_id && payload.channel_id && slackThreadIdentity?.threadTs) {
     await taskServiceV2.linkSlackThread({
       taskId: task.id,
       slackTeamId: payload.team_id,
       slackChannelId: payload.channel_id,
-      slackThreadTs: payload.thread_ts,
+      slackThreadTs: slackThreadIdentity.threadTs,
       slackMessageTs: payload.message_ts || null
     });
   }
@@ -1719,6 +1743,13 @@ function createApp() {
       const consumed = await consumePairCode(code, consumedByUserId);
       if (!consumed) {
         return res.status(400).json({ error: 'Invalid or expired pair code' });
+      }
+
+      if (consumedByUserId) {
+        const alreadyMember = await isProjectMember(consumed.projectId, consumedByUserId);
+        if (!alreadyMember) {
+          await addProjectMember(consumed.projectId, consumedByUserId, 'member');
+        }
       }
 
       return res.json({
