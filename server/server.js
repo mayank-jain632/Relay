@@ -1823,11 +1823,9 @@ function createApp() {
           return res.status(404).json({ error: 'Assignee user not found' });
         }
         assigneeId = user.login;
-      } else if (assignedToUserId === null || String(assignedToUserId || '').trim() === '') {
+      } else if (body.assignedToUserId !== undefined && (assignedToUserId === null || String(assignedToUserId || '').trim() === '')) {
         assignedToUserId = null;
-        if (body.assignedToUserId !== undefined) {
-          assigneeId = null;
-        }
+        assigneeId = null;
       }
 
       const allowed = Object.fromEntries(
