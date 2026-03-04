@@ -1049,7 +1049,17 @@ function createApp() {
         installedByUserId: installedByUserId || null
       });
 
-      await touchSlackProjectEvent(projectId, workspaceId, null);
+      // Slack connect is the authoritative project binding for a workspace.
+      // Rebind this project row explicitly to prevent stale cross-workspace routing.
+      await query(
+        `INSERT INTO slack_project_config (project_id, slack_workspace_id, default_channel_id, last_event_at, created_at)
+         VALUES ($1, $2, NULL, NOW(), NOW())
+         ON CONFLICT(project_id)
+         DO UPDATE SET
+           slack_workspace_id = EXCLUDED.slack_workspace_id,
+           last_event_at = NOW()`,
+        [projectId, workspaceId]
+      );
       const dashboardBaseUrl = getDashboardBaseUrl(appBaseUrl);
       return res.redirect(`${dashboardBaseUrl}/projects/${projectId}/integrations/slack?connected=1`);
     } catch (error) {
@@ -1618,12 +1628,26 @@ function createApp() {
       const normalizedPayload = normalizeSlackIngestPayload(overrideText ? { ...body, text: overrideText } : body);
       const projectId = await resolveProjectIdFromSlackPayload(normalizedPayload, fallbackProjectId);
       if (!projectId) {
+        log('error', 'slack_ingest_unmapped_workspace', {
+          requestId: req.requestId,
+          teamId: normalizedPayload.team_id || null,
+          channelId: normalizedPayload.channel_id || null,
+          fallbackProjectId: fallbackProjectId || null
+        });
         return res.status(200).json({
           ok: false,
           response_type: 'ephemeral',
           text: 'Relay could not map this Slack workspace/channel to a project. Connect Slack from Relay dashboard first.'
         });
       }
+
+      log('info', 'slack_ingest_routed', {
+        requestId: req.requestId,
+        teamId: normalizedPayload.team_id || null,
+        channelId: normalizedPayload.channel_id || null,
+        fallbackProjectId: fallbackProjectId || null,
+        resolvedProjectId: projectId
+      });
 
       if (!normalizedPayload.text) {
         await touchSlackProjectEvent(projectId, normalizedPayload.team_id || null, normalizedPayload.channel_id || null);

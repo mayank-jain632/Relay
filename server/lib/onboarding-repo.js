@@ -103,6 +103,21 @@ async function resolveProjectIdForSlack(workspaceId, channelId) {
     return null;
   }
 
+  // Authoritative mapping: workspace installation -> project.
+  // This avoids stale project_config rows from routing events into the wrong project.
+  const installResult = await query(
+    `SELECT project_id
+     FROM slack_installations
+     WHERE slack_workspace_id = $1 AND project_id IS NOT NULL
+     LIMIT 1`,
+    [normalizedWorkspace]
+  );
+
+  if (installResult.rows[0]?.project_id) {
+    return String(installResult.rows[0].project_id);
+  }
+
+  // Legacy fallback for older records that may not have slack_installations yet.
   const configResult = await query(
     `SELECT project_id
      FROM slack_project_config
@@ -112,19 +127,7 @@ async function resolveProjectIdForSlack(workspaceId, channelId) {
     [normalizedWorkspace, normalizedChannel || null]
   );
 
-  if (configResult.rows[0]?.project_id) {
-    return String(configResult.rows[0].project_id);
-  }
-
-  const installResult = await query(
-    `SELECT project_id
-     FROM slack_installations
-     WHERE slack_workspace_id = $1 AND project_id IS NOT NULL
-     LIMIT 1`,
-    [normalizedWorkspace]
-  );
-
-  return installResult.rows[0]?.project_id ? String(installResult.rows[0].project_id) : null;
+  return configResult.rows[0]?.project_id ? String(configResult.rows[0].project_id) : null;
 }
 
 async function touchSlackProjectEvent(projectId, workspaceId, channelId) {
@@ -137,7 +140,8 @@ async function touchSlackProjectEvent(projectId, workspaceId, channelId) {
      VALUES ($1, $2, $3, NOW(), NOW())
      ON CONFLICT(project_id)
      DO UPDATE SET
-       slack_workspace_id = COALESCE(EXCLUDED.slack_workspace_id, slack_project_config.slack_workspace_id),
+       -- Keep existing workspace binding during ingest events; only Slack connect should rebind.
+       slack_workspace_id = COALESCE(slack_project_config.slack_workspace_id, EXCLUDED.slack_workspace_id),
        default_channel_id = COALESCE(EXCLUDED.default_channel_id, slack_project_config.default_channel_id),
        last_event_at = NOW()`,
     [projectId, workspaceId || null, channelId || null]

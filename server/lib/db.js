@@ -130,6 +130,14 @@ async function runCompatibilityMigrations() {
   await safeQuery(`CREATE INDEX IF NOT EXISTS idx_oauth_states_expires ON oauth_states(expires_at)`);
   await safeQuery(`CREATE INDEX IF NOT EXISTS idx_vscode_login_attempts_expires ON vscode_login_attempts(expires_at)`);
   await safeQuery(`CREATE INDEX IF NOT EXISTS idx_slack_installations_project ON slack_installations(project_id)`);
+
+  // Repair stale project->workspace mappings created before Slack routing hardening.
+  await safeQuery(`UPDATE slack_project_config cfg
+    SET slack_workspace_id = inst.slack_workspace_id
+    FROM slack_installations inst
+    WHERE inst.project_id IS NOT NULL
+      AND cfg.project_id = inst.project_id
+      AND cfg.slack_workspace_id IS DISTINCT FROM inst.slack_workspace_id`);
   await safeQuery(`CREATE INDEX IF NOT EXISTS idx_slack_project_config_workspace ON slack_project_config(slack_workspace_id, default_channel_id)`);
   await safeQuery(`CREATE INDEX IF NOT EXISTS idx_workspace_pair_codes_project ON workspace_pair_codes(project_id, consumed_at, expires_at)`);
   await safeQuery(`CREATE INDEX IF NOT EXISTS idx_workspace_invites_project ON workspace_invites(project_id, expires_at)`);
