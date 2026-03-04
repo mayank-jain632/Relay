@@ -2,7 +2,7 @@
  
 Relay is a Slack-to-IDE workflow system:
 - VS Code extension for developers
-- Hosted API + Postgres system of record
+- Hosted API + Postgres system of record 
 - Dashboard for PM setup and task operations
 
 Compatibility note:
