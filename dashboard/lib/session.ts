@@ -17,6 +17,7 @@ export interface DashboardSession {
 const SESSION_COOKIE = 'relay_dashboard_session';
 const LOGIN_COOKIE = 'relay_dashboard_login_id';
 const LOGIN_NEXT_COOKIE = 'relay_dashboard_login_next';
+const ACTIVE_PROJECT_COOKIE = 'relay_dashboard_active_project';
 const SESSION_TTL_MS = 1000 * 60 * 60 * 24 * 14;
 
 function base64Url(input: string): string {
@@ -102,6 +103,10 @@ export function getLoginNextCookieName(): string {
   return LOGIN_NEXT_COOKIE;
 }
 
+export function getActiveProjectCookieName(): string {
+  return ACTIVE_PROJECT_COOKIE;
+}
+
 export async function getDashboardSession(): Promise<DashboardSession | null> {
   const store = await cookies();
   return decodeSession(store.get(SESSION_COOKIE)?.value);
@@ -151,6 +156,26 @@ export async function getPendingLoginNext(): Promise<string | null> {
 export async function clearPendingLoginNext(): Promise<void> {
   const store = await cookies();
   store.set(LOGIN_NEXT_COOKIE, '', baseCookieOptions(0));
+}
+
+export async function getActiveProjectId(): Promise<string | null> {
+  const store = await cookies();
+  return store.get(ACTIVE_PROJECT_COOKIE)?.value || null;
+}
+
+export async function setActiveProjectId(projectId: string): Promise<void> {
+  const store = await cookies();
+  const value = String(projectId || '').trim();
+  if (!value) {
+    store.set(ACTIVE_PROJECT_COOKIE, '', baseCookieOptions(0));
+    return;
+  }
+  store.set(ACTIVE_PROJECT_COOKIE, value, baseCookieOptions(60 * 60 * 24 * 30));
+}
+
+export async function clearActiveProjectId(): Promise<void> {
+  const store = await cookies();
+  store.set(ACTIVE_PROJECT_COOKIE, '', baseCookieOptions(0));
 }
 
 export function applyPendingLoginCookies(response: NextResponse, loginId: string, nextPath: string): void {

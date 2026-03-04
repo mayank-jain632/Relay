@@ -17,7 +17,7 @@ interface DashboardShellProps {
 
 function navHref(key: NavKey, projectId?: string): string {
   if (key === 'projects') {
-    return '/projects';
+    return projectId ? `/projects/select?project=${encodeURIComponent(projectId)}` : '/projects';
   }
 
   if (!projectId) {

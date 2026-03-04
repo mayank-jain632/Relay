@@ -15,6 +15,7 @@ interface SidebarViewState {
   scope: SidebarScope;
   loginInProgress: boolean;
   authRequired: boolean;
+  projectId?: string;
 }
 
 export class SidebarProvider implements vscode.WebviewViewProvider {
@@ -76,6 +77,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     this.state = {
       ...this.state,
       ...partial
+    };
+    this.postState();
+  }
+
+  updateProject(projectId: string | undefined): void {
+    this.state = {
+      ...this.state,
+      projectId
     };
     this.postState();
   }
@@ -153,6 +162,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 <body>
   <section class="header">
     <div id="auth"></div>
+    <div id="project" class="sub" style="margin-top:8px"></div>
     <div class="filter">
       <button id="scopeMy">My Tasks</button>
       <button id="scopeAll">All Tasks</button>
@@ -163,6 +173,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     const vscode = acquireVsCodeApi();
     const list = document.getElementById('list');
     const authNode = document.getElementById('auth');
+    const projectNode = document.getElementById('project');
     const scopeMy = document.getElementById('scopeMy');
     const scopeAll = document.getElementById('scopeAll');
 
@@ -217,6 +228,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       }
     }
 
+    function renderProject(state) {
+      const projectId = String(state.projectId || '').trim();
+      if (!projectId) {
+        projectNode.textContent = 'Project: not linked';
+        return;
+      }
+
+      projectNode.textContent = 'Project: ' + projectId;
+    }
+
     function renderTasks(tasks) {
       if (!Array.isArray(tasks) || tasks.length === 0) {
         list.innerHTML = '<div class="empty">No tasks assigned.</div>';
@@ -254,6 +275,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
       const state = event.data.state;
       renderAuth(state);
+      renderProject(state);
       renderTasks(state.tasks || []);
     });
   </script>

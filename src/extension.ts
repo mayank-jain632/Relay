@@ -69,12 +69,30 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   await loadRepoConfig(sidebar, { interactive: false });
+  updateSidebarProjectContext(sidebar);
   await refreshAuthState(context, sidebar);
 
   context.subscriptions.push(
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       repoRootCacheByWorkspace.clear();
-      void loadRepoConfig(sidebar, { interactive: false });
+      void loadRepoConfig(sidebar, { interactive: false }).then(() => {
+        updateSidebarProjectContext(sidebar);
+      });
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.workspace.onDidSaveTextDocument((document) => {
+      const filePath = normalizeFilePath(document.uri.fsPath);
+      if (!filePath.endsWith('/.relay/config.json') && !filePath.endsWith('/.contexthud/config.json')) {
+        return;
+      }
+
+      void loadRepoConfig(sidebar, { interactive: false }).then(async () => {
+        updateSidebarProjectContext(sidebar);
+        await refreshAuthState(context, sidebar);
+        await refreshTasks(sidebar, { interactive: false });
+      });
     })
   );
 
@@ -121,6 +139,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const config = await writeRepoConfig();
         setApiContext({ apiBaseUrl: config.apiBaseUrl, projectId: config.projectId });
         configReady = true;
+        updateSidebarProjectContext(sidebar);
         refreshBackoffMs = 5000;
         void vscode.window.showInformationMessage(`Relay initialized for project ${config.projectId}.`);
         await refreshTasks(sidebar, { interactive: true });
@@ -240,6 +259,7 @@ async function loadRepoConfig(sidebar: SidebarProvider, options: { interactive: 
     clearApiContext();
     currentTasks = [];
     sidebar.updateTasks([]);
+    sidebar.updateProject(undefined);
     if (options.interactive) {
       const action = 'Initialize Relay for this repo';
       const selected = await vscode.window.showWarningMessage(
@@ -255,6 +275,12 @@ async function loadRepoConfig(sidebar: SidebarProvider, options: { interactive: 
 
   configReady = true;
   setApiContext({ apiBaseUrl: config.apiBaseUrl, projectId: config.projectId });
+  updateSidebarProjectContext(sidebar);
+}
+
+function updateSidebarProjectContext(sidebar: SidebarProvider): void {
+  const context = getApiContext();
+  sidebar.updateProject(context?.projectId);
 }
 
 async function linkWorkspaceByPairCode(sidebar: SidebarProvider): Promise<void> {
@@ -290,6 +316,7 @@ async function linkWorkspaceByPairCode(sidebar: SidebarProvider): Promise<void> 
 
     configReady = true;
     setApiContext({ apiBaseUrl: config.apiBaseUrl, projectId: config.projectId });
+    updateSidebarProjectContext(sidebar);
     refreshBackoffMs = 5000;
     void vscode.window.showInformationMessage(`Relay linked to project ${config.projectId}.`);
     await refreshTasks(sidebar, { interactive: true });

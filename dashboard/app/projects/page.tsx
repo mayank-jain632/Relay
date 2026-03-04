@@ -3,6 +3,7 @@ import { requireDashboardSession } from '@/lib/auth';
 import { relayGet } from '@/lib/relay-api';
 import { DashboardShell } from '@/components/DashboardShell';
 import { WorkspaceActionsMenu } from '@/components/WorkspaceActionsMenu';
+import { getActiveProjectId } from '@/lib/session';
 
 interface ProjectItem {
   id: string;
@@ -59,7 +60,11 @@ export default async function ProjectsPage({
   }
 
   const projectParam = typeof resolvedSearchParams.project === 'string' ? resolvedSearchParams.project : '';
-  const selectedProject = projects.find((project) => project.id === projectParam) ?? projects[0];
+  const activeProjectId = await getActiveProjectId();
+  const selectedProject =
+    projects.find((project) => project.id === projectParam) ||
+    projects.find((project) => project.id === activeProjectId) ||
+    projects[0];
   const navProjectId = selectedProject?.id;
   const uiError = renderError(resolvedSearchParams.error);
 
@@ -98,7 +103,7 @@ export default async function ProjectsPage({
       sessionName={session.user.name}
       actions={navProjectId ? (
         <>
-          <Link className="button-secondary" href={`/projects?project=${navProjectId}`}>Set Active</Link>
+          <Link className="button-secondary" href={`/projects/select?project=${encodeURIComponent(navProjectId)}`}>Set Active</Link>
           <Link className="button-secondary" href={`/projects/${navProjectId}/integrations/slack`}>Slack</Link>
           <Link className="button-secondary" href={`/projects/${navProjectId}/tasks`}>Tasks</Link>
         </>
@@ -143,7 +148,7 @@ export default async function ProjectsPage({
                   <td>{new Date(project.createdAt).toLocaleString()}</td>
                   <td>
                     <div className="row" style={{ gap: 6 }}>
-                      <Link className="button-secondary" href={`/projects?project=${project.id}`}>Set Active</Link>
+                      <Link className="button-secondary" href={`/projects/select?project=${encodeURIComponent(project.id)}`}>Set Active</Link>
                       <WorkspaceActionsMenu
                         projectId={project.id}
                         projectName={project.name}
