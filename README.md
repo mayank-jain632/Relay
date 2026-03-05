@@ -12,7 +12,7 @@ Compatibility note:
 ## 1) API Server Setup
 
 Create `.env` from `.env.example`. 
-
+  
 Required for API:
 - `DATABASE_URL`
 - `APP_BASE_URL`
