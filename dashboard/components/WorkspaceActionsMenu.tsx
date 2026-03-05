@@ -165,6 +165,27 @@ export function WorkspaceActionsMenu({
             </div>
           </div>
 
+          {(String(projectRole || '').toLowerCase() === 'owner' || String(projectRole || '').toLowerCase() === 'admin') ? (
+            <div className="workspace-actions-section-card">
+              <h4>Danger zone</h4>
+              <p className="muted" style={{ margin: '0 0 10px' }}>
+                Delete this workspace and all of its tasks. This cannot be undone.
+              </p>
+              <form
+                action={`/projects/${projectId}/delete`}
+                method="post"
+                onSubmit={(event) => {
+                  const confirmed = window.confirm('Delete this workspace and all tasks? This action cannot be undone.');
+                  if (!confirmed) {
+                    event.preventDefault();
+                  }
+                }}
+              >
+                <button className="button-secondary" type="submit">Delete Workspace</button>
+              </form>
+            </div>
+          ) : null}
+
           <div className="workspace-actions-footer muted">
             Workspace ID: {projectId} · Tasks: {onboarding?.taskCount ?? 0}
           </div>

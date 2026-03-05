@@ -113,6 +113,7 @@ export default async function ProjectsPage({
       {resolvedSearchParams.connected ? <div className="notice">Slack connected successfully.</div> : null}
       {resolvedSearchParams.paired ? <div className="notice">Pair code generated.</div> : null}
       {resolvedSearchParams.invite_created ? <div className="notice">Invite link generated.</div> : null}
+      {resolvedSearchParams.project_deleted ? <div className="notice">Workspace deleted.</div> : null}
       {uiError ? <div className="error">{uiError}</div> : null}
       {error ? <div className="error">{error}</div> : null}
 

@@ -603,7 +603,28 @@ export function TasksBoard({
 
               <div className="row" style={{ justifyContent: 'space-between' }}>
                 <span className="muted">Last updated: {formatDate(selectedTask.updatedAt)}</span>
-                <button className="button-primary" type="submit" disabled={busyTaskId === selectedTask.id}>Save changes</button>
+                <div className="row" style={{ gap: 8 }}>
+                  <button
+                    className="button-secondary"
+                    type="button"
+                    disabled={busyTaskId === selectedTask.id}
+                    onClick={() => {
+                      const confirmed = window.confirm('Delete this task? This cannot be undone.');
+                      if (!confirmed) {
+                        return;
+                      }
+
+                      const form = document.createElement('form');
+                      form.method = 'POST';
+                      form.action = `/projects/${projectId}/tasks/${selectedTask.id}/delete`;
+                      document.body.appendChild(form);
+                      form.submit();
+                    }}
+                  >
+                    Delete Task
+                  </button>
+                  <button className="button-primary" type="submit" disabled={busyTaskId === selectedTask.id}>Save changes</button>
+                </div>
               </div>
             </form>
 

@@ -1,5 +1,5 @@
 const { v4: uuidv4 } = require('uuid');
-const { query } = require('./db');
+const { query, withTransaction } = require('./db');
 
 function normalizeSlackIdentifier(value) {
   const raw = String(value || '').trim();
@@ -272,9 +272,35 @@ async function upsertSlackUserMap(projectId, slackUserId, user) {
   };
 }
 
+async function deleteProject(projectId) {
+  const normalizedProjectId = String(projectId || '').trim();
+  if (!normalizedProjectId) {
+    return null;
+  }
+
+  return withTransaction(async (client) => {
+    const result = await client.query(
+      'DELETE FROM projects WHERE id = $1 RETURNING id, name, created_at',
+      [normalizedProjectId]
+    );
+
+    const row = result.rows[0];
+    if (!row) {
+      return null;
+    }
+
+    return {
+      id: row.id,
+      name: row.name,
+      createdAt: row.created_at
+    };
+  });
+}
+
 module.exports = {
   addProjectMember,
   createProject,
+  deleteProject,
   getProjectMembership,
   getUserByGithubId,
   getUserById,
