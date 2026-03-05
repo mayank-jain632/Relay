@@ -8,6 +8,7 @@ import {
   addTaskCommit,
   clearApiContext,
   createTaskRequest,
+  deleteTaskRequest,
   fetchMe,
   fetchProjectMembers,
   fetchProjects,
@@ -119,7 +120,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         openChangedFile,
         openAllChangedFiles,
         addCurrentFileToTask,
-        copyFileList
+        copyFileList,
+        deleteTask: (taskId) => deleteTaskFromExtension(taskId, sidebar)
       },
       async () => {
         await refreshTasks(sidebar, { interactive: false });
@@ -953,6 +955,25 @@ async function openPr(taskId: string): Promise<void> {
     ...(repoFullName ? { repoFullName } : {})
   });
   vscode.window.showInformationMessage('Opened PR compare view, moved task to review, and enabled auto-close on merge.');
+}
+
+async function deleteTaskFromExtension(taskId: string, sidebar: SidebarProvider): Promise<void> {
+  const task = await getTaskById(taskId);
+  const label = String(task.title || task.description || taskId).trim();
+  const picked = await vscode.window.showWarningMessage(
+    `Delete task "${label}"? This cannot be undone.`,
+    { modal: true },
+    'Delete Task'
+  );
+
+  if (picked !== 'Delete Task') {
+    return;
+  }
+
+  await deleteTaskRequest(taskId);
+  currentTasks = currentTasks.filter((candidate) => candidate.id !== taskId);
+  sidebar.updateTasks(currentTasks);
+  void vscode.window.showInformationMessage('Task deleted.');
 }
 
 function resolveTaskFileUri(filePath: string): vscode.Uri {

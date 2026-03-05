@@ -13,7 +13,8 @@ interface DetailMessage {
     | 'openChangedFile'
     | 'openAllChangedFiles'
     | 'addCurrentFileToTask'
-    | 'copyFileList';
+    | 'copyFileList'
+    | 'deleteTask';
   status?: Task['status'];
   title?: string;
   description?: string;
@@ -35,6 +36,7 @@ interface TaskApi {
   openAllChangedFiles: (taskId: string) => Promise<void>;
   addCurrentFileToTask: (taskId: string) => Promise<void>;
   copyFileList: (taskId: string) => Promise<void>;
+  deleteTask: (taskId: string) => Promise<void>;
 }
 
 export class TaskDetailPanel {
@@ -142,6 +144,13 @@ export class TaskDetailPanel {
 
     if (message.type === 'copyFileList') {
       await this.api.copyFileList(this.taskId);
+      return;
+    }
+
+    if (message.type === 'deleteTask') {
+      await this.api.deleteTask(this.taskId);
+      await this.onTaskChanged();
+      this.panel.dispose();
     }
   }
 
@@ -201,6 +210,7 @@ export class TaskDetailPanel {
       <button data-status="done">Done</button>
       <button id="openPr">Open PR</button>
       <button id="viewTaskDiff">View Task Diff</button>
+      <button id="deleteTask">Delete Task</button>
     </div>
 
     <div>
@@ -260,6 +270,7 @@ export class TaskDetailPanel {
     document.getElementById('openAllChangedFiles').addEventListener('click', () => vscode.postMessage({ type: 'openAllChangedFiles' }));
     document.getElementById('addCurrentFileToTask').addEventListener('click', () => vscode.postMessage({ type: 'addCurrentFileToTask' }));
     document.getElementById('copyFileList').addEventListener('click', () => vscode.postMessage({ type: 'copyFileList' }));
+    document.getElementById('deleteTask').addEventListener('click', () => vscode.postMessage({ type: 'deleteTask' }));
     document.getElementById('save').addEventListener('click', () => {
       vscode.postMessage({
         type: 'savePatch',

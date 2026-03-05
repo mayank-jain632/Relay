@@ -250,6 +250,20 @@ export async function patchTask(taskId: string, patch: Record<string, unknown>):
   return data.task;
 }
 
+export async function deleteTaskRequest(taskId: string): Promise<{ ok: boolean; taskId: string }> {
+  const context = requireApiContext();
+  const response = await apiFetch(`/projects/${encodeURIComponent(context.projectId)}/tasks/${encodeURIComponent(taskId)}/delete`, {
+    method: 'POST'
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Task delete failed: ${response.status}${detail ? ` - ${detail}` : ''}`);
+  }
+
+  return (await response.json()) as { ok: boolean; taskId: string };
+}
+
 export async function createTaskRequest(payload: {
   title: string;
   description?: string;
