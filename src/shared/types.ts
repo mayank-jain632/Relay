@@ -59,6 +59,15 @@ export interface ProjectSummary {
   createdAt?: string;
 }
 
+export interface ProjectMember {
+  projectId: string;
+  userId: string;
+  role: string;
+  login: string;
+  name?: string | null;
+  avatarUrl?: string | null;
+}
+
 export interface UserMapping {
   [slackId: string]: string;
 }

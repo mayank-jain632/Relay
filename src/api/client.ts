@@ -1,4 +1,4 @@
-import { ProjectSummary, RelayCapabilities, RelayUser, Task, TaskDetailResponse, TaskListResponse } from '../shared/types';
+import { ProjectMember, ProjectSummary, RelayCapabilities, RelayUser, Task, TaskDetailResponse, TaskListResponse } from '../shared/types';
 import { GitCommit } from '../git/git';
 
 export interface ApiContext {
@@ -160,6 +160,22 @@ export async function fetchProjects(): Promise<ProjectSummary[]> {
   return Array.isArray(data?.projects) ? data.projects : [];
 }
 
+export async function fetchProjectMembers(projectId?: string): Promise<ProjectMember[]> {
+  const context = requireApiContext();
+  const resolvedProjectId = String(projectId || context.projectId || '').trim();
+  if (!resolvedProjectId) {
+    throw new Error('Project context is missing.');
+  }
+
+  const response = await apiFetch(`/projects/${encodeURIComponent(resolvedProjectId)}/members`);
+  if (!response.ok) {
+    throw new Error(`Project members fetch failed: ${response.status}`);
+  }
+
+  const data = (await response.json()) as { ok?: boolean; members?: ProjectMember[] };
+  return Array.isArray(data?.members) ? data.members : [];
+}
+
 export async function verifyPairCode(apiBaseUrl: string, code: string): Promise<PairVerifyResponse> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json'
@@ -241,6 +257,8 @@ export async function createTaskRequest(payload: {
   source?: string;
   priority?: string;
   linkedFiles?: string[];
+  assignee_id?: string | null;
+  assignedToUserId?: string | null;
 }): Promise<Task> {
   const context = requireApiContext();
   const response = await apiFetch('/api/tasks', {
@@ -252,7 +270,9 @@ export async function createTaskRequest(payload: {
       status: payload.status || 'todo',
       source: payload.source || 'vscode',
       priority: payload.priority || 'normal',
-      linkedFiles: Array.isArray(payload.linkedFiles) ? payload.linkedFiles : []
+      linkedFiles: Array.isArray(payload.linkedFiles) ? payload.linkedFiles : [],
+      assignee_id: payload.assignee_id || null,
+      assignedToUserId: payload.assignedToUserId || null
     }
   });
 

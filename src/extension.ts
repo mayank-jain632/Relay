@@ -1,7 +1,7 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { SidebarProvider } from './SidebarProvider';
-import { ProjectSummary, RelayUser, Task } from './shared/types';
+import { ProjectMember, ProjectSummary, RelayUser, Task } from './shared/types';
 import { getWorkspaceRelativePath, normalizeFilePath, prioritizeByFile, sortByOrder } from './shared/taskUtils';
 import { TaskDetailPanel } from './TaskDetailPanel';
 import {
@@ -9,6 +9,7 @@ import {
   clearApiContext,
   createTaskRequest,
   fetchMe,
+  fetchProjectMembers,
   fetchProjects,
   fetchTaskList,
   getTaskById,
@@ -471,6 +472,48 @@ async function linkWorkspaceByPairCode(context: vscode.ExtensionContext, sidebar
   }
 }
 
+async function promptTaskAssignee(): Promise<{ assignee_id: string | null; assignedToUserId: string | null }> {
+  const projectId = getApiContext()?.projectId;
+  if (!projectId) {
+    return { assignee_id: null, assignedToUserId: null };
+  }
+
+  let members: ProjectMember[] = [];
+  try {
+    members = await fetchProjectMembers(projectId);
+  } catch {
+    return { assignee_id: null, assignedToUserId: null };
+  }
+
+  if (!members.length) {
+    return { assignee_id: null, assignedToUserId: null };
+  }
+
+  const pick = await vscode.window.showQuickPick(
+    [
+      { label: 'Unassigned', description: 'No owner', member: null as ProjectMember | null },
+      ...members.map((member) => ({
+        label: member.login,
+        description: member.name || member.role || '',
+        member
+      }))
+    ],
+    {
+      title: 'Relay: Assign task (optional)',
+      placeHolder: 'Pick owner for this task'
+    }
+  );
+
+  if (!pick || !pick.member) {
+    return { assignee_id: null, assignedToUserId: null };
+  }
+
+  return {
+    assignee_id: pick.member.login || null,
+    assignedToUserId: pick.member.userId || null
+  };
+}
+
 async function createTaskFromExtension(sidebar: SidebarProvider): Promise<void> {
   if (!configReady) {
     await loadRepoConfig(sidebar, { interactive: true });
@@ -501,12 +544,16 @@ async function createTaskFromExtension(sidebar: SidebarProvider): Promise<void> 
     placeHolder: 'Describe scope, constraints, and expected outcome'
   });
 
+  const assignee = await promptTaskAssignee();
+
   try {
     const created = await createTaskRequest({
       title: String(title).trim(),
       description: String(description || '').trim() || String(title).trim(),
       source: 'vscode',
-      status: 'todo'
+      status: 'todo',
+      assignee_id: assignee.assignee_id,
+      assignedToUserId: assignee.assignedToUserId
     });
     await refreshTasks(sidebar, { interactive: false });
     void vscode.window.showInformationMessage('Task created: ' + created.title);
@@ -678,6 +725,37 @@ async function refreshTasks(sidebar: SidebarProvider, options: RefreshOptions): 
     }
   }
 
+  if (authUser) {
+    await refreshProjectDirectory(sidebar);
+
+    const context = getApiContext();
+    const activeProjectId = context?.projectId || '';
+    if (activeProjectId && availableProjects.length > 0 && !availableProjects.some((project) => project.id === activeProjectId)) {
+      const fallback = availableProjects[0];
+      try {
+        const existingConfig = await readRepoConfig();
+        await writeRepoConfig({
+          apiBaseUrl: context?.apiBaseUrl || existingConfig?.apiBaseUrl || getRelayStringSetting('apiBaseUrl', 'http://localhost:8787'),
+          projectId: fallback.id,
+          baseBranch: existingConfig?.baseBranch || 'main'
+        });
+        setApiContext({
+          apiBaseUrl: context?.apiBaseUrl || existingConfig?.apiBaseUrl || getRelayStringSetting('apiBaseUrl', 'http://localhost:8787'),
+          projectId: fallback.id
+        });
+        currentProjectName = fallback.name;
+        updateSidebarProjectContext(sidebar);
+        if (options.interactive) {
+          void vscode.window.showWarningMessage(`Active project was removed. Switched to ${fallback.name}.`);
+        }
+      } catch (switchError) {
+        if (options.interactive) {
+          void vscode.window.showWarningMessage('Active project was removed. Re-link workspace to continue. ' + String(switchError));
+        }
+      }
+    }
+  }
+
   try {
     const data = await fetchTaskList(getTaskFetchParams());
     const pending = sortByOrder(data.tasks.filter((task) => task.status !== 'done'));
@@ -700,6 +778,17 @@ async function refreshTasks(sidebar: SidebarProvider, options: RefreshOptions): 
     } else if (msg.includes('403')) {
       if (options.interactive) {
         void vscode.window.showWarningMessage('You are not a member of this project for the current account. Re-link with a pair code while signed into the intended GitHub account, or run Relay: Sign Out and sign in again.');
+      }
+      currentTasks = [];
+      sidebar.updateTasks(currentTasks);
+    } else if (msg.includes('404')) {
+      currentTasks = [];
+      sidebar.updateTasks(currentTasks);
+      if (authUser) {
+        await refreshProjectDirectory(sidebar);
+      }
+      if (options.interactive) {
+        void vscode.window.showWarningMessage('Project or tasks endpoint not found. If this project was deleted, switch to another project from the Relay sidebar.');
       }
     } else if (options.interactive) {
       const retry = 'Retry';
