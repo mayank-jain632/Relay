@@ -1872,6 +1872,56 @@ function createApp() {
     }
   });
 
+  app.post('/projects/:projectId/slack/default-channel', requireAuth, requireProjectMembership, requireProjectOwnerOrAdmin, async (req, res, next) => {
+    try {
+      const channelIdRaw = String(req.body?.channelId || req.body?.defaultChannelId || '').trim();
+      const channelId = channelIdRaw.toUpperCase();
+      if (!channelId) {
+        return res.status(400).json({ error: 'channelId is required' });
+      }
+
+      if (!/^[CGD][A-Z0-9]+$/.test(channelId)) {
+        return res.status(400).json({
+          error: 'Invalid channel ID format. Use a Slack channel ID like C0123ABCD.'
+        });
+      }
+
+      const configResult = await query(
+        `SELECT slack_workspace_id
+         FROM slack_project_config
+         WHERE project_id = $1
+         LIMIT 1`,
+        [req.projectId]
+      );
+
+      const workspaceId = String(configResult.rows[0]?.slack_workspace_id || '').trim();
+      if (!workspaceId) {
+        return res.status(400).json({
+          error: 'Connect Slack first, then set a default channel.'
+        });
+      }
+
+      await query(
+        `INSERT INTO slack_project_config (project_id, slack_workspace_id, default_channel_id, last_event_at, created_at)
+         VALUES ($1, $2, $3, NOW(), NOW())
+         ON CONFLICT(project_id)
+         DO UPDATE SET
+           slack_workspace_id = COALESCE(EXCLUDED.slack_workspace_id, slack_project_config.slack_workspace_id),
+           default_channel_id = EXCLUDED.default_channel_id`,
+        [req.projectId, workspaceId, channelId]
+      );
+
+      return res.json({
+        ok: true,
+        projectId: req.projectId,
+        slackWorkspaceId: workspaceId,
+        defaultChannelId: channelId
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   app.get('/projects/:projectId/slack/users', requireAuth, requireProjectMembership, async (req, res, next) => {
     try {
       const [mappedUsers, seenResult, configResult] = await Promise.all([

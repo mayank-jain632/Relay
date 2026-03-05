@@ -64,8 +64,10 @@ export default async function SlackIntegrationPage({
     >
       {resolvedSearchParams.connected ? <div className="notice">Slack connected successfully.</div> : null}
       {resolvedSearchParams.test_sent ? <div className="notice">Test message sent successfully.</div> : null}
+      {resolvedSearchParams.default_set ? <div className="notice">Default channel saved successfully.</div> : null}
       {resolvedSearchParams.error ? <div className="error">{String(resolvedSearchParams.error)}</div> : null}
       {resolvedSearchParams.test_error ? <div className="error">{String(resolvedSearchParams.test_error)}</div> : null}
+      {resolvedSearchParams.default_error ? <div className="error">{String(resolvedSearchParams.default_error)}</div> : null}
       {error ? <div className="error">{error}</div> : null}
 
       <section className="card grid">
@@ -91,6 +93,19 @@ export default async function SlackIntegrationPage({
       </section>
 
       <section className="card grid">
+        <h2 className="card-title">Default channel</h2>
+        <p className="muted" style={{ margin: 0 }}>
+          Set this once so PMs can use "Default channel" for test messages and future automation.
+        </p>
+        <div className="row"><span className="muted">Current default:</span><strong>{toText(status?.defaultChannelId) || 'Not set'}</strong></div>
+        <form action={`/projects/${projectId}/integrations/slack/set-default`} method="post" className="row">
+          <input className="input" type="text" name="channelId" defaultValue={toText(status?.defaultChannelId)} placeholder="Paste Slack channel ID (e.g. C0123ABCD)" />
+          <button className="button-primary" type="submit">Set default channel</button>
+        </form>
+        <p className="muted" style={{ margin: 0 }}>Need help? Open "How to find channel ID" in the section below.</p>
+      </section>
+
+      <section className="card grid">
         <h2 className="card-title">Send test message</h2>
         <p className="muted" style={{ margin: 0 }}>
           Send a quick test to confirm your bot token, workspace routing, and posting permissions before pilot sessions.
@@ -102,7 +117,7 @@ export default async function SlackIntegrationPage({
               <option value="my_dm">My DM (if mapped)</option>
               <option value="custom_channel">Custom channel ID</option>
             </select>
-            <input className="input" type="text" name="channelId" placeholder="Optional channel ID (C123...)" />
+            <input className="input" type="text" name="channelId" placeholder="Channel ID (first-time setup, e.g. C0123ABCD)" />
           </div>
           <textarea
             className="textarea"
@@ -112,6 +127,17 @@ export default async function SlackIntegrationPage({
           <div className="row">
             <button className="button-primary" type="submit">Send test message</button>
           </div>
+
+          <details className="card" style={{ marginTop: 10 }}>
+            <summary style={{ cursor: 'pointer', fontWeight: 600 }}>How to find channel ID</summary>
+            <div className="grid" style={{ marginTop: 10, gap: 6 }}>
+              <div className="muted">1. Open Slack and go to the channel you want Relay to use.</div>
+              <div className="muted">2. Click the channel name at the top.</div>
+              <div className="muted">3. Open <strong>About</strong> (or channel details) and copy <strong>Channel ID</strong> (starts with <code>C</code>).</div>
+              <div className="muted">4. In Relay, choose <strong>Custom channel ID</strong>, paste it once, and send test message.</div>
+              <div className="muted">5. After first success, <strong>Default channel</strong> should work automatically.</div>
+            </div>
+          </details>
         </form>
       </section>
 
