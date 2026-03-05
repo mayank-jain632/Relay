@@ -4,7 +4,7 @@ import { ProjectSummary, RelayUser, Task } from './shared/types';
 type SidebarScope = 'my' | 'all';
 
 interface SidebarMessage {
-  type: 'openTask' | 'signIn' | 'setScope' | 'setProject';
+  type: 'openTask' | 'signIn' | 'signOut' | 'setScope' | 'setProject';
   taskId?: string;
   scope?: SidebarScope;
   projectId?: string;
@@ -27,6 +27,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private view?: vscode.WebviewView;
   private onOpenTask?: (taskId: string) => void;
   private onSignIn?: () => void;
+  private onSignOut?: () => void;
   private onSetScope?: (scope: SidebarScope) => void;
   private onSetProject?: (projectId: string) => void;
   private state: SidebarViewState = {
@@ -43,6 +44,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   setOnSignIn(handler: () => void): void {
     this.onSignIn = handler;
+  }
+
+  setOnSignOut(handler: () => void): void {
+    this.onSignOut = handler;
   }
 
   setOnSetScope(handler: (scope: SidebarScope) => void): void {
@@ -66,6 +71,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
       if (message.type === 'signIn' && this.onSignIn) {
         this.onSignIn();
+        return;
+      }
+
+      if (message.type === 'signOut' && this.onSignOut) {
+        this.onSignOut();
         return;
       }
 
@@ -246,8 +256,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           '      <div class="sub">' + escapeHtml(user.name || 'Signed in') + '</div>',
           '    </div>',
           '  </div>',
+          '  <button id="signout" class="btn">Sign out</button>',
           '</div>'
         ].join('');
+
+        const signOutBtn = document.getElementById('signout');
+        if (signOutBtn) {
+          signOutBtn.addEventListener('click', () => vscode.postMessage({ type: 'signOut' }));
+        }
       }
 
       scopeMy.classList.toggle('active', state.scope === 'my');

@@ -58,6 +58,7 @@ export default async function TasksPage({
     >
       {resolvedSearchParams.created ? <div className="notice">Task created.</div> : null}
       {resolvedSearchParams.updated ? <div className="notice">Task updated.</div> : null}
+      {resolvedSearchParams.deleted ? <div className="notice">Task deleted.</div> : null}
       {resolvedSearchParams.error ? <div className="error">{String(resolvedSearchParams.error)}</div> : null}
       {error ? <div className="error">{error}</div> : null}
 

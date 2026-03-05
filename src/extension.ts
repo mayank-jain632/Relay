@@ -129,6 +129,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void startLoginFlow(context, sidebar);
   });
 
+  sidebar.setOnSignOut(() => {
+    void signOut(context, sidebar, true);
+  });
+
   sidebar.setOnSetScope((scope) => {
     void setTaskScope(scope, sidebar);
   });
@@ -162,6 +166,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand('contexthud.signOut', async () => {
+      await signOut(context, sidebar, true);
+    })
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand('relay.refresh', async () => {
       await vscode.commands.executeCommand('contexthud.refresh');
     })
@@ -187,7 +197,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand('relay.signOut', async () => {
-      await signOut(context, sidebar, true);
+      await vscode.commands.executeCommand('contexthud.signOut');
     })
   );
 
@@ -416,16 +426,7 @@ async function linkWorkspaceByPairCode(context: vscode.ExtensionContext, sidebar
   }
 
   const existingConfig = await readRepoConfig();
-  const apiBaseInput = await vscode.window.showInputBox({
-    title: 'Relay: API Base URL',
-    prompt: 'Confirm Relay API URL',
-    value: existingConfig?.apiBaseUrl || getRelayStringSetting('apiBaseUrl', 'http://localhost:8787'),
-    placeHolder: 'https://relay-api.yourdomain.com'
-  });
-
-  if (!apiBaseInput) {
-    return;
-  }
+  const apiBaseInput = existingConfig?.apiBaseUrl || getRelayStringSetting('apiBaseUrl', 'http://localhost:8787');
 
   try {
     const previousProjectId = getApiContext()?.projectId || null;
@@ -449,7 +450,28 @@ async function linkWorkspaceByPairCode(context: vscode.ExtensionContext, sidebar
     }
     await refreshTasks(sidebar, { interactive: true });
   } catch (error) {
-    void vscode.window.showErrorMessage(`Relay link failed: ${String(error)}`);
+    void vscode.window.showErrorMessage(`Relay link failed: ${String(error)}. If this says fetch/network/404, set relay.apiBaseUrl once in VS Code Settings.`);
+  }
+}
+
+async function signOut(context: vscode.ExtensionContext, sidebar: SidebarProvider, notify: boolean): Promise<void> {
+  authUser = undefined;
+  authRequired = true;
+  taskScope = 'all';
+  setAuthToken(undefined);
+  await context.secrets.delete(SESSION_TOKEN_KEY);
+  await context.secrets.delete(LEGACY_SESSION_TOKEN_KEY);
+  updateSidebarAuthState(sidebar);
+
+  if (configReady) {
+    await refreshTasks(sidebar, { interactive: false });
+  } else {
+    currentTasks = [];
+    sidebar.updateTasks([]);
+  }
+
+  if (notify) {
+    void vscode.window.showInformationMessage('Signed out of Relay in this VS Code profile.');
   }
 }
 

@@ -9,6 +9,7 @@ const {
   addCommit,
   backfillSlackAssigneeMapping,
   createTask,
+  deleteTask,
   getTaskById,
   listTasks,
   nextOrderIndex,
@@ -27,6 +28,7 @@ const { isTasksDualWriteEnabled, isTasksReadV2Enabled } = require('./lib/feature
 const {
   addProjectMember,
   createProject,
+  deleteProject,
   getProjectMembership,
   getUserById,
   getUserByLogin,
@@ -1698,6 +1700,19 @@ function createApp() {
     }
   });
 
+  app.post('/projects/:projectId/delete', requireAuth, requireProjectMembership, requireProjectOwnerOrAdmin, async (req, res, next) => {
+    try {
+      const removed = await deleteProject(req.projectId);
+      if (!removed) {
+        return res.status(404).json({ error: 'Project not found' });
+      }
+
+      return res.json({ ok: true, project: removed });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   app.get('/projects/:projectId/onboarding', requireAuth, requireProjectMembership, async (req, res, next) => {
     try {
       const onboarding = await getOnboardingState(req.projectId);
@@ -2379,6 +2394,21 @@ function createApp() {
       }
 
       return res.json({ ok: true, task: responseTask, warning: warning || undefined });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post('/projects/:projectId/tasks/:taskId/delete', requireAuth, requireProjectMembership, async (req, res, next) => {
+    try {
+      const taskId = String(req.params.taskId || '').trim();
+      const task = await getTaskByIdCompat(req.projectId, taskId);
+      if (!task) {
+        return res.status(404).json({ error: 'Task not found' });
+      }
+
+      await deleteTask(req.projectId, taskId);
+      return res.json({ ok: true, taskId });
     } catch (error) {
       return next(error);
     }

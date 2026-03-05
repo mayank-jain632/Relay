@@ -344,6 +344,16 @@ async function summarizeTask(projectId, taskId) {
   return patchTask(projectId, taskId, ai);
 }
 
+async function deleteTask(projectId, taskId) {
+  const existing = await getTaskById(projectId, taskId);
+  if (!existing) {
+    return null;
+  }
+
+  await query('DELETE FROM tasks WHERE project_id = $1 AND id = $2', [projectId, taskId]);
+  return existing;
+}
+
 async function recordTaskEvent(input) {
   await query(
     `INSERT INTO task_events (
@@ -398,6 +408,7 @@ module.exports = {
   addCommit,
   backfillSlackAssigneeMapping,
   createTask,
+  deleteTask,
   getTaskById,
   listTasks,
   localAiSummarize,
