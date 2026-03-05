@@ -7,6 +7,7 @@ import { TaskDetailPanel } from './TaskDetailPanel';
 import {
   addTaskCommit,
   clearApiContext,
+  createTaskRequest,
   fetchMe,
   fetchProjects,
   fetchTaskList,
@@ -133,6 +134,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void signOut(context, sidebar, true);
   });
 
+  sidebar.setOnCreateTask(() => {
+    void createTaskFromExtension(sidebar);
+  });
+
   sidebar.setOnSetScope((scope) => {
     void setTaskScope(scope, sidebar);
   });
@@ -172,6 +177,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand('contexthud.createTask', async () => {
+      await createTaskFromExtension(sidebar);
+    })
+  );
+
+  context.subscriptions.push(
     vscode.commands.registerCommand('relay.refresh', async () => {
       await vscode.commands.executeCommand('contexthud.refresh');
     })
@@ -198,6 +209,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   context.subscriptions.push(
     vscode.commands.registerCommand('relay.signOut', async () => {
       await vscode.commands.executeCommand('contexthud.signOut');
+    })
+  );
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand('relay.createTask', async () => {
+      await vscode.commands.executeCommand('contexthud.createTask');
     })
   );
 
@@ -454,6 +471,50 @@ async function linkWorkspaceByPairCode(context: vscode.ExtensionContext, sidebar
   }
 }
 
+async function createTaskFromExtension(sidebar: SidebarProvider): Promise<void> {
+  if (!configReady) {
+    await loadRepoConfig(sidebar, { interactive: true });
+    if (!configReady) {
+      return;
+    }
+  }
+
+  if (!authUser) {
+    void vscode.window.showWarningMessage('Sign in with GitHub first to create tasks.');
+    return;
+  }
+
+  const title = await vscode.window.showInputBox({
+    title: 'Relay: Create Task',
+    prompt: 'Task title',
+    placeHolder: 'Fix retry logic in API middleware',
+    validateInput: (value) => (String(value || '').trim() ? undefined : 'Title is required')
+  });
+
+  if (!title) {
+    return;
+  }
+
+  const description = await vscode.window.showInputBox({
+    title: 'Relay: Create Task',
+    prompt: 'Description (optional)',
+    placeHolder: 'Describe scope, constraints, and expected outcome'
+  });
+
+  try {
+    const created = await createTaskRequest({
+      title: String(title).trim(),
+      description: String(description || '').trim() || String(title).trim(),
+      source: 'vscode',
+      status: 'todo'
+    });
+    await refreshTasks(sidebar, { interactive: false });
+    void vscode.window.showInformationMessage('Task created: ' + created.title);
+  } catch (error) {
+    void vscode.window.showErrorMessage('Relay task creation failed: ' + String(error));
+  }
+}
+
 async function signOut(context: vscode.ExtensionContext, sidebar: SidebarProvider, notify: boolean): Promise<void> {
   authUser = undefined;
   authRequired = true;
@@ -470,19 +531,6 @@ async function signOut(context: vscode.ExtensionContext, sidebar: SidebarProvide
     sidebar.updateTasks([]);
   }
 
-  if (notify) {
-    void vscode.window.showInformationMessage('Signed out of Relay in this VS Code profile.');
-  }
-}
-
-async function signOut(context: vscode.ExtensionContext, sidebar: SidebarProvider, notify: boolean): Promise<void> {
-  authUser = undefined;
-  authRequired = true;
-  taskScope = 'all';
-  setAuthToken(undefined);
-  await context.secrets.delete(SESSION_TOKEN_KEY);
-  await context.secrets.delete(LEGACY_SESSION_TOKEN_KEY);
-  updateSidebarAuthState(sidebar);
   if (notify) {
     void vscode.window.showInformationMessage('Signed out of Relay in this VS Code profile.');
   }

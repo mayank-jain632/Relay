@@ -4,7 +4,7 @@ import { ProjectSummary, RelayUser, Task } from './shared/types';
 type SidebarScope = 'my' | 'all';
 
 interface SidebarMessage {
-  type: 'openTask' | 'signIn' | 'signOut' | 'setScope' | 'setProject';
+  type: 'openTask' | 'signIn' | 'signOut' | 'createTask' | 'setScope' | 'setProject';
   taskId?: string;
   scope?: SidebarScope;
   projectId?: string;
@@ -28,6 +28,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private onOpenTask?: (taskId: string) => void;
   private onSignIn?: () => void;
   private onSignOut?: () => void;
+  private onCreateTask?: () => void;
   private onSetScope?: (scope: SidebarScope) => void;
   private onSetProject?: (projectId: string) => void;
   private state: SidebarViewState = {
@@ -48,6 +49,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   setOnSignOut(handler: () => void): void {
     this.onSignOut = handler;
+  }
+
+  setOnCreateTask(handler: () => void): void {
+    this.onCreateTask = handler;
   }
 
   setOnSetScope(handler: (scope: SidebarScope) => void): void {
@@ -76,6 +81,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
       if (message.type === 'signOut' && this.onSignOut) {
         this.onSignOut();
+        return;
+      }
+
+      if (message.type === 'createTask' && this.onCreateTask) {
+        this.onCreateTask();
         return;
       }
 
@@ -156,6 +166,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     .login { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .sub { color: var(--muted); font-size: 10px; margin-top: 4px; }
     .btn { border: 1px solid #2f9c90; background: #214741; color: #d6fff8; border-radius: 6px; padding: 4px 8px; font-size: 11px; cursor: pointer; }
+    .auth-actions { display: inline-flex; gap: 6px; align-items: center; }
     .btn:disabled { opacity: 0.6; cursor: default; }
     .project-block { margin-top: 8px; }
     .project-title { font-size: 11px; font-weight: 600; }
@@ -256,9 +267,17 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           '      <div class="sub">' + escapeHtml(user.name || 'Signed in') + '</div>',
           '    </div>',
           '  </div>',
-          '  <button id="signout" class="btn">Sign out</button>',
+          '  <div class="auth-actions">',
+          '    <button id="createTask" class="btn">New Task</button>',
+          '    <button id="signout" class="btn">Sign out</button>',
+          '  </div>',
           '</div>'
         ].join('');
+
+        const createTaskBtn = document.getElementById('createTask');
+        if (createTaskBtn) {
+          createTaskBtn.addEventListener('click', () => vscode.postMessage({ type: 'createTask' }));
+        }
 
         const signOutBtn = document.getElementById('signout');
         if (signOutBtn) {

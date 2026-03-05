@@ -234,6 +234,37 @@ export async function patchTask(taskId: string, patch: Record<string, unknown>):
   return data.task;
 }
 
+export async function createTaskRequest(payload: {
+  title: string;
+  description?: string;
+  status?: Task['status'];
+  source?: string;
+  priority?: string;
+  linkedFiles?: string[];
+}): Promise<Task> {
+  const context = requireApiContext();
+  const response = await apiFetch('/api/tasks', {
+    method: 'POST',
+    body: {
+      workspaceId: context.projectId,
+      title: payload.title,
+      description: payload.description,
+      status: payload.status || 'todo',
+      source: payload.source || 'vscode',
+      priority: payload.priority || 'normal',
+      linkedFiles: Array.isArray(payload.linkedFiles) ? payload.linkedFiles : []
+    }
+  });
+
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Task create failed: ${response.status}${detail ? ` - ${detail}` : ''}`);
+  }
+
+  const data = (await response.json()) as { ok?: boolean; task: Task };
+  return data.task;
+}
+
 export async function addTaskCommit(taskId: string, commit: GitCommit): Promise<Task> {
   const context = requireApiContext();
   const response = await apiFetch(`/projects/${encodeURIComponent(context.projectId)}/tasks/${encodeURIComponent(taskId)}/commits`, {

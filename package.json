@@ -47,6 +47,14 @@
       {
         "command": "relay.diagnostics",
         "title": "Relay: Run Diagnostics"
+      },
+      {
+        "command": "relay.createTask",
+        "title": "Relay: Create Task"
+      },
+      {
+        "command": "relay.signOut",
+        "title": "Relay: Sign Out"
       }
     ],
     "configuration": {
