@@ -14,7 +14,7 @@ function toFriendlySlackTestError(error: unknown): string {
   }
 
   if (raw.includes('not_in_channel')) {
-    return 'Relay bot is not in that channel yet. Invite it to the channel, then retry.';
+    return 'Relay bot is not in that channel yet. Invite it to the channel with "/invite @Relay", then retry.';
   }
 
   if (raw.includes('invalid_auth') || raw.includes('account_inactive')) {
