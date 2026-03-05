@@ -1,5 +1,7 @@
 import * as vscode from 'vscode';
 
+export const RELAY_DEFAULT_API_BASE_URL = 'https://relay-production-9927.up.railway.app';
+
 function normalizeString(value: string | undefined): string {
   return String(value || '').trim();
 }

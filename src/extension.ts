@@ -39,7 +39,7 @@ import {
 } from './git/git';
 import { getActiveTaskId, setActiveTaskId } from './state/activeTask';
 import { readRepoConfig, writeRepoConfig } from './shared/repoConfig';
-import { getRelayNumberSetting, getRelayStringSetting } from './shared/settings';
+import { RELAY_DEFAULT_API_BASE_URL, getRelayNumberSetting, getRelayStringSetting } from './shared/settings';
 
 let currentTasks: Task[] = [];
 let refreshTimeoutHandle: NodeJS.Timeout | undefined;
@@ -446,39 +446,11 @@ async function linkWorkspaceByPairCode(context: vscode.ExtensionContext, sidebar
   }
 
   const existingConfig = await readRepoConfig();
-  let apiBaseInput = existingConfig?.apiBaseUrl || getRelayStringSetting('apiBaseUrl', 'http://localhost:8787');
+  const apiBaseInput = existingConfig?.apiBaseUrl || getRelayStringSetting('apiBaseUrl', RELAY_DEFAULT_API_BASE_URL);
 
   try {
     const previousProjectId = getApiContext()?.projectId || null;
-    let linked;
-    try {
-      linked = await verifyPairCode(apiBaseInput, code);
-    } catch (verifyError) {
-      const message = String(verifyError || '');
-      const shouldPromptForApiUrl =
-        /fetch failed|ECONNREFUSED|ENOTFOUND|404/i.test(message) ||
-        /^https?:\/\/localhost(?::\d+)?$/i.test(apiBaseInput) ||
-        apiBaseInput === 'http://localhost:8787';
-
-      if (!shouldPromptForApiUrl) {
-        throw verifyError;
-      }
-
-      const enteredApiBaseUrl = await vscode.window.showInputBox({
-        title: 'Relay API URL Required',
-        prompt: 'Enter your hosted Relay API base URL (from Railway)',
-        value: apiBaseInput,
-        placeHolder: 'https://relay-production-xxxx.up.railway.app'
-      });
-
-      if (!enteredApiBaseUrl) {
-        throw verifyError;
-      }
-
-      apiBaseInput = enteredApiBaseUrl.trim();
-      linked = await verifyPairCode(apiBaseInput, code);
-    }
-
+    const linked = await verifyPairCode(apiBaseInput, code);
     const resolvedApiBaseUrl = linked.apiBaseUrl || apiBaseInput;
     const config = await writeRepoConfig({
       apiBaseUrl: resolvedApiBaseUrl,
@@ -501,7 +473,7 @@ async function linkWorkspaceByPairCode(context: vscode.ExtensionContext, sidebar
     }
     await refreshTasks(sidebar, { interactive: true });
   } catch (error) {
-    void vscode.window.showErrorMessage(`Relay link failed: ${String(error)}. Verify API URL and pair code, then retry.`);
+    void vscode.window.showErrorMessage(`Relay link failed: ${String(error)}. Verify pair code and retry.`);
   }
 }
 async function promptTaskAssignee(): Promise<{ assignee_id: string | null; assignedToUserId: string | null }> {
@@ -767,12 +739,12 @@ async function refreshTasks(sidebar: SidebarProvider, options: RefreshOptions): 
       try {
         const existingConfig = await readRepoConfig();
         await writeRepoConfig({
-          apiBaseUrl: context?.apiBaseUrl || existingConfig?.apiBaseUrl || getRelayStringSetting('apiBaseUrl', 'http://localhost:8787'),
+          apiBaseUrl: context?.apiBaseUrl || existingConfig?.apiBaseUrl || getRelayStringSetting('apiBaseUrl', RELAY_DEFAULT_API_BASE_URL),
           projectId: fallback.id,
           baseBranch: existingConfig?.baseBranch || 'main'
         });
         setApiContext({
-          apiBaseUrl: context?.apiBaseUrl || existingConfig?.apiBaseUrl || getRelayStringSetting('apiBaseUrl', 'http://localhost:8787'),
+          apiBaseUrl: context?.apiBaseUrl || existingConfig?.apiBaseUrl || getRelayStringSetting('apiBaseUrl', RELAY_DEFAULT_API_BASE_URL),
           projectId: fallback.id
         });
         currentProjectName = fallback.name;

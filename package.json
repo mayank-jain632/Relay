@@ -72,7 +72,7 @@
         },
         "relay.apiBaseUrl": {
           "type": "string",
-          "default": "http://localhost:8787",
+          "default": "https://relay-production-9927.up.railway.app",
           "description": "Backend API base URL."
         },
         "relay.user.handle": {
@@ -108,7 +108,7 @@
         },
         "contexthud.apiBaseUrl": {
           "type": "string",
-          "default": "http://localhost:8787",
+          "default": "https://relay-production-9927.up.railway.app",
           "description": "[Legacy] Use relay.apiBaseUrl instead."
         },
         "contexthud.user.handle": {

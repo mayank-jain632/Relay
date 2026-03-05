@@ -1,5 +1,6 @@
 import { ProjectMember, ProjectSummary, RelayCapabilities, RelayUser, Task, TaskDetailResponse, TaskListResponse } from '../shared/types';
 import { GitCommit } from '../git/git';
+import { RELAY_DEFAULT_API_BASE_URL } from '../shared/settings';
 
 export interface ApiContext {
   apiBaseUrl: string;
@@ -19,7 +20,7 @@ let apiContext: ApiContext | undefined;
 function normalizeApiBaseUrl(raw: string): string {
   const trimmed = String(raw || '').trim();
   if (!trimmed) {
-    return 'http://localhost:8787';
+    return RELAY_DEFAULT_API_BASE_URL;
   }
 
   if (/^https?:\/\//i.test(trimmed)) {
@@ -63,7 +64,7 @@ function buildApiUrl(pathname: string): string {
 }
 
 function buildAuthUrl(pathname: string): string {
-  const base = apiContext?.apiBaseUrl || 'http://localhost:8787';
+  const base = apiContext?.apiBaseUrl || RELAY_DEFAULT_API_BASE_URL;
   const normalizedPath = pathname.startsWith('/') ? pathname : `/${pathname}`;
   return `${normalizeApiBaseUrl(base)}${normalizedPath}`;
 }

@@ -1,6 +1,6 @@
 import * as path from 'path';
 import * as vscode from 'vscode';
-import { getRelayStringSetting } from './settings';
+import { RELAY_DEFAULT_API_BASE_URL, getRelayStringSetting } from './settings';
 
 export interface RepoConfig {
   apiBaseUrl: string;
@@ -14,7 +14,7 @@ const LEGACY_CONFIG_REL_PATH = path.join('.contexthud', 'config.json');
 function normalizeApiBaseUrl(raw: string): string {
   const trimmed = String(raw || '').trim();
   if (!trimmed) {
-    return 'http://localhost:8787';
+    return RELAY_DEFAULT_API_BASE_URL;
   }
 
   if (/^https?:\/\//i.test(trimmed)) {
@@ -76,7 +76,7 @@ export async function readRepoConfig(): Promise<RepoConfig | undefined> {
       }
 
       return {
-        apiBaseUrl: normalizeApiBaseUrl(parsed.apiBaseUrl || 'http://localhost:8787'),
+        apiBaseUrl: normalizeApiBaseUrl(parsed.apiBaseUrl || RELAY_DEFAULT_API_BASE_URL),
         projectId: String(parsed.projectId),
         baseBranch: String(parsed.baseBranch || 'main')
       };
@@ -95,7 +95,7 @@ export async function writeRepoConfig(partial?: Partial<RepoConfig>): Promise<Re
   }
 
   const defaults: RepoConfig = {
-    apiBaseUrl: normalizeApiBaseUrl(getRelayStringSetting('apiBaseUrl', 'http://localhost:8787')),
+    apiBaseUrl: normalizeApiBaseUrl(getRelayStringSetting('apiBaseUrl', RELAY_DEFAULT_API_BASE_URL)),
     projectId: partial?.projectId || '',
     baseBranch: partial?.baseBranch || 'main'
   };
