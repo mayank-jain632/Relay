@@ -1947,8 +1947,12 @@ function createApp() {
       const config = configResult.rows[0] || null;
 
       let channelId = '';
+      let resolvedFrom = '';
       if (target === 'custom_channel') {
         channelId = customChannelId;
+        if (channelId) {
+          resolvedFrom = 'custom_channel';
+        }
       } else if (target === 'my_dm') {
         const mapResult = await query(
           `SELECT slack_user_id
@@ -1958,12 +1962,52 @@ function createApp() {
           [req.projectId, req.user.userId]
         );
         channelId = String(mapResult.rows[0]?.slack_user_id || '').trim();
+        if (channelId) {
+          resolvedFrom = 'my_dm';
+        }
       } else {
         channelId = String(config?.default_channel_id || '').trim() || customChannelId;
+        if (channelId) {
+          resolvedFrom = String(config?.default_channel_id || '').trim() ? 'default_channel' : 'custom_channel';
+        }
+
+        if (!channelId) {
+          const recentResult = await query(
+            `SELECT slack_channel_id
+             FROM tasks
+             WHERE project_id = $1
+               AND slack_channel_id IS NOT NULL
+               AND slack_channel_id <> ''
+             ORDER BY COALESCE(updated_at, timestamp, created_at) DESC
+             LIMIT 1`,
+            [req.projectId]
+          );
+          channelId = String(recentResult.rows[0]?.slack_channel_id || '').trim();
+          if (channelId) {
+            resolvedFrom = 'recent_task_channel';
+          }
+        }
       }
 
       if (!channelId) {
-        return res.status(400).json({ error: 'No Slack destination found. Provide a channel id or map your Slack account.' });
+        return res.status(400).json({
+          error: 'No Slack destination found. Pick "Custom channel" once (C123...) or use "My DM" after account mapping.'
+        });
+      }
+
+      const existingDefaultChannelId = String(config?.default_channel_id || '').trim();
+      const shouldPersistDefault = target !== 'my_dm' && !!channelId && !existingDefaultChannelId;
+      if (shouldPersistDefault) {
+        await query(
+          `INSERT INTO slack_project_config (project_id, slack_workspace_id, default_channel_id, last_event_at, created_at)
+           VALUES ($1, $2, $3, NOW(), NOW())
+           ON CONFLICT(project_id)
+           DO UPDATE SET
+             slack_workspace_id = COALESCE(EXCLUDED.slack_workspace_id, slack_project_config.slack_workspace_id),
+             default_channel_id = EXCLUDED.default_channel_id,
+             last_event_at = NOW()`,
+          [req.projectId, config?.slack_workspace_id || null, channelId]
+        );
       }
 
       const text = String(body.text || '').trim() ||
@@ -1983,6 +2027,7 @@ function createApp() {
         ok: true,
         target,
         channelId,
+        resolvedFrom: resolvedFrom || null,
         workspaceId: config?.slack_workspace_id || null
       });
     } catch (error) {
