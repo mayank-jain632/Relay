@@ -502,12 +502,10 @@ async function findAutoCloseTasksForMergedPr({ branchName, repoFullName, compare
      WHERE auto_close_on_merge = TRUE
        AND status <> 'done'
        AND (
-         (
-           LOWER(COALESCE(branch_name, '')) = LOWER($1)
-           AND ($2 = '' OR LOWER(COALESCE(pr_url, '')) LIKE $2)
-         )
+         ($1 <> '' AND LOWER(COALESCE(branch_name, '')) = LOWER($1))
          OR LOWER(COALESCE(pr_url, '')) = ANY($3::text[])
          OR ($4 <> '' AND LOWER(COALESCE(pr_url, '')) = $4)
+         OR ($2 <> '' AND LOWER(COALESCE(pr_url, '')) LIKE $2)
        )
      ORDER BY updated_at DESC
      LIMIT 200`,
@@ -2119,6 +2117,16 @@ function createApp() {
         ? await syncTaskStatusFromPullRequest(req, req.body || {})
         : { matched: 0, updated: 0, ignored: 'dual_write_disabled' };
       const result = await autoCloseTasksForMergedPullRequest(req, req.body || {});
+      log('info', 'github_webhook_processed', {
+        requestId: req.requestId,
+        event,
+        action: String((req.body || {}).action || ''),
+        syncedMatched: sync?.matched ?? 0,
+        syncedUpdated: sync?.updated ?? 0,
+        autoCloseMatched: result?.matched ?? 0,
+        autoCloseUpdated: result?.updated ?? 0,
+        ignored: result?.ignored || sync?.ignored || null
+      });
       return res.status(200).json({ ok: true, event, synced: sync, autoClose: result });
     } catch (error) {
       return next(error);

@@ -197,6 +197,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   context.subscriptions.push(
+    vscode.commands.registerCommand('relay.signOut', async () => {
+      await signOut(context, sidebar, true);
+    })
+  );
+
+  context.subscriptions.push(
     vscode.window.onDidChangeActiveTextEditor(async (editor) => {
       if (!editor) {
         return;
@@ -398,21 +404,28 @@ async function linkWorkspaceByPairCode(context: vscode.ExtensionContext, sidebar
     updateSidebarProjectContext(sidebar);
     await refreshProjectDirectory(sidebar);
     refreshBackoffMs = 5000;
+    await signOut(context, sidebar, false);
     if (previousProjectId && previousProjectId !== config.projectId) {
-      authUser = undefined;
-      authRequired = true;
-      taskScope = "all";
-      setAuthToken(undefined);
-      await context.secrets.delete(SESSION_TOKEN_KEY);
-      await context.secrets.delete(LEGACY_SESSION_TOKEN_KEY);
-      updateSidebarAuthState(sidebar);
-      void vscode.window.showInformationMessage("Workspace linked. Sign in with GitHub for this project to load My Tasks.");
+      void vscode.window.showInformationMessage("Workspace switched. Sign in with GitHub for this project to load My Tasks.");
     } else {
-      void vscode.window.showInformationMessage(`Relay linked to project ${config.projectId}.`);
+      void vscode.window.showInformationMessage(`Relay linked to project ${config.projectId}. Sign in with GitHub to continue.`);
     }
     await refreshTasks(sidebar, { interactive: true });
   } catch (error) {
     void vscode.window.showErrorMessage(`Relay link failed: ${String(error)}`);
+  }
+}
+
+async function signOut(context: vscode.ExtensionContext, sidebar: SidebarProvider, notify: boolean): Promise<void> {
+  authUser = undefined;
+  authRequired = true;
+  taskScope = 'all';
+  setAuthToken(undefined);
+  await context.secrets.delete(SESSION_TOKEN_KEY);
+  await context.secrets.delete(LEGACY_SESSION_TOKEN_KEY);
+  updateSidebarAuthState(sidebar);
+  if (notify) {
+    void vscode.window.showInformationMessage('Signed out of Relay in this VS Code profile.');
   }
 }
 
@@ -579,7 +592,7 @@ async function refreshTasks(sidebar: SidebarProvider, options: RefreshOptions): 
       }
     } else if (msg.includes('403')) {
       if (options.interactive) {
-        void vscode.window.showWarningMessage('You are not a member of this project.');
+        void vscode.window.showWarningMessage('You are not a member of this project for the current account. Re-link with a pair code while signed into the intended GitHub account, or run Relay: Sign Out and sign in again.');
       }
     } else if (options.interactive) {
       const retry = 'Retry';
@@ -697,6 +710,7 @@ async function startTask(taskId: string): Promise<Task> {
   const updated = await patchTaskRequest(taskId, {
     branchName,
     status: 'in_progress',
+    autoCloseOnMerge: true,
     ...(repoFullName ? { repoFullName } : {})
   });
 
