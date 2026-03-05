@@ -102,9 +102,9 @@ export async function writeRepoConfig(partial?: Partial<RepoConfig>): Promise<Re
 
   if (!defaults.projectId) {
     const enteredProjectId = await vscode.window.showInputBox({
-      title: 'Initialize Relay',
-      prompt: 'Enter projectId from the hosted backend',
-      placeHolder: 'project UUID'
+      title: 'Initialize Relay (Manual)',
+      prompt: 'Enter projectId (workspace UUID) from Relay dashboard',
+      placeHolder: 'e.g. 17ae2df4-c247-48e5-9f94-e9870ea4fecf'
     });
 
     if (!enteredProjectId) {
@@ -116,8 +116,8 @@ export async function writeRepoConfig(partial?: Partial<RepoConfig>): Promise<Re
 
   if (!partial?.apiBaseUrl) {
     const enteredApiBaseUrl = await vscode.window.showInputBox({
-      title: 'Initialize Relay',
-      prompt: 'Enter hosted API base URL',
+      title: 'Initialize Relay (Manual)',
+      prompt: 'Enter hosted Relay API base URL',
       value: defaults.apiBaseUrl,
       placeHolder: 'https://api.relay.dev'
     });
