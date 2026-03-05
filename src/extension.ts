@@ -145,18 +145,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(
     vscode.commands.registerCommand('contexthud.initializeProjectConfig', async () => {
-      try {
-        const config = await writeRepoConfig();
-        setApiContext({ apiBaseUrl: config.apiBaseUrl, projectId: config.projectId });
-        configReady = true;
-        updateSidebarProjectContext(sidebar);
-        await refreshProjectDirectory(sidebar);
-        refreshBackoffMs = 5000;
-        void vscode.window.showInformationMessage(`Relay initialized for project ${config.projectId}.`);
-        await refreshTasks(sidebar, { interactive: true });
-      } catch (error) {
-        void vscode.window.showErrorMessage(`Relay initialization failed: ${String(error)}`);
-      }
+      await initializeRelayForRepo(context, sidebar);
     })
   );
 
@@ -364,6 +353,54 @@ async function switchProject(projectId: string, sidebar: SidebarProvider): Promi
     void vscode.window.showErrorMessage(`Relay project switch failed: ${String(error)}`);
   } finally {
     projectSwitchInProgress = false;
+  }
+}
+
+async function initializeRelayForRepo(context: vscode.ExtensionContext, sidebar: SidebarProvider): Promise<void> {
+  const choice = await vscode.window.showQuickPick(
+    [
+      {
+        label: 'Link workspace with Pair Code',
+        description: 'Recommended',
+        detail: 'Use code from Relay dashboard (Setup & Share).',
+        value: 'pair'
+      },
+      {
+        label: 'Manual setup with Project ID',
+        description: 'Advanced',
+        detail: 'Enter projectId + API URL manually.',
+        value: 'manual'
+      }
+    ],
+    {
+      title: 'Initialize Relay for this repo',
+      placeHolder: 'Choose setup method'
+    }
+  );
+
+  if (!choice) {
+    return;
+  }
+
+  if (choice.value === 'pair') {
+    await linkWorkspaceByPairCode(context, sidebar);
+    return;
+  }
+
+  try {
+    const config = await writeRepoConfig();
+    setApiContext({ apiBaseUrl: config.apiBaseUrl, projectId: config.projectId });
+    configReady = true;
+    updateSidebarProjectContext(sidebar);
+    await refreshProjectDirectory(sidebar);
+    refreshBackoffMs = 5000;
+    await signOut(context, sidebar, false);
+    void vscode.window.showInformationMessage(
+      `Relay initialized for project ${config.projectId}. Sign in with GitHub to continue.`
+    );
+    await refreshTasks(sidebar, { interactive: true });
+  } catch (error) {
+    void vscode.window.showErrorMessage(`Relay initialization failed: ${String(error)}`);
   }
 }
 
