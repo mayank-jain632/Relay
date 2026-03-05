@@ -24,7 +24,7 @@ const {
   listTasksV2
 } = require('./lib/task-repo-v2');
 const taskServiceV2 = require('./lib/task-service-v2');
-const { isTasksDualWriteEnabled, isTasksReadV2Enabled } = require('./lib/feature-flags');
+const { asBoolean, isTasksDualWriteEnabled, isTasksReadV2Enabled } = require('./lib/feature-flags');
 const {
   addProjectMember,
   createProject,
@@ -1761,6 +1761,13 @@ function createApp() {
       if (consumedByUserId) {
         const alreadyMember = await isProjectMember(consumed.projectId, consumedByUserId);
         if (!alreadyMember) {
+          const allowAutoAdd = asBoolean(process.env.PAIR_CODE_AUTO_ADD_MEMBER, false);
+          if (!allowAutoAdd) {
+            return res.status(403).json({
+              error: 'Not a project member. Ask the workspace owner for an invite link first.'
+            });
+          }
+
           await addProjectMember(consumed.projectId, consumedByUserId, 'member');
         }
       }
