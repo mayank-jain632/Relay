@@ -891,8 +891,29 @@ async function ingestSlackTask(projectId, payload, appBaseUrl) {
       fallbackAssignee = slackProfile.displayName;
     }
   }
-  const assigneeId = mapped?.login || fallbackAssignee;
-  const assignedToUserId = mapped?.userId || null;
+
+  let mappedByLogin = null;
+  if (!mapped) {
+    const loginCandidates = [
+      fallbackAssignee,
+      parsed.assigneeRef,
+      String(payload.user_name || '').trim()
+    ]
+      .map((value) => String(value || '').trim().toLowerCase())
+      .filter(Boolean);
+
+    for (const login of loginCandidates) {
+      const user = await getUserByLogin(login);
+      if (user) {
+        mappedByLogin = user;
+        break;
+      }
+    }
+  }
+
+  const resolvedAssignee = mapped || mappedByLogin;
+  const assigneeId = resolvedAssignee?.login || fallbackAssignee;
+  const assignedToUserId = resolvedAssignee?.userId || null;
   const slackThreadIdentity = buildSlackThreadIdentity(payload);
 
   const canUseSlackThreadIdentity =
@@ -923,7 +944,7 @@ async function ingestSlackTask(projectId, payload, appBaseUrl) {
     projectId,
     assignee_id: assigneeId,
     assignedToUserId,
-    pendingSlackAssignee: mapped ? null : parsed.assigneeRef,
+    pendingSlackAssignee: resolvedAssignee ? null : parsed.assigneeRef,
     createdByUserId: null,
     updatedByUserId: null,
     description: parsed.description,
@@ -967,7 +988,7 @@ async function ingestSlackTask(projectId, payload, appBaseUrl) {
     }
   });
 
-  if (!mapped && isLikelySlackUserId(parsed.assigneeRef) && appBaseUrl) {
+  if (!resolvedAssignee && isLikelySlackUserId(parsed.assigneeRef) && appBaseUrl) {
     const warning = await sendSlackAccountLink(projectId, payload.team_id || null, parsed.assigneeRef, appBaseUrl);
     if (warning) {
       log('error', 'slack_account_link_send_failed', {
