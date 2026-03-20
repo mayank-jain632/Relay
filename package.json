@@ -187,6 +187,7 @@
   "files": [
     "dist",
     "resources",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ]
 }
