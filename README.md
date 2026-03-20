@@ -1,5 +1,13 @@
 # Relay 
  
+## VS Code Marketplace Quick Start
+
+1. Install the Relay extension from the VS Code Marketplace.
+2. Open your repository in VS Code.
+3. Run `Relay: Link Workspace` from the Command Palette.
+4. Paste a pair code generated in the Relay dashboard.
+5. Sign in with GitHub from the Relay sidebar to load tasks.
+
 Relay is a Slack-to-IDE workflow system:
 - VS Code extension for developers
 - Hosted API + Postgres system of record 

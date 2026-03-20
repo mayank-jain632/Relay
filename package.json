@@ -1,10 +1,9 @@
 {
-  "name": "contexthud",
+  "name": "relay",
   "displayName": "Relay",
-  "version": "0.0.1",
-  "private": true,
-  "description": "Relay: Slack-to-IDE task execution",
-  "main": "./dist/extension.js",
+  "description": "Turn Slack conversations into executable tasks inside VS Code.",
+  "publisher": "relay-dev",
+  "version": "1.0.0",
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -148,7 +147,8 @@
     "dashboard:dev": "npm --prefix dashboard run dev",
     "dashboard:build": "npm --prefix dashboard run build",
     "dashboard:start": "npm --prefix dashboard run start",
-    "db:backfill:relay": "node server/scripts/backfill-relay-native-tasks.js"
+    "db:backfill:relay": "node server/scripts/backfill-relay-native-tasks.js",
+    "vscode:prepublish": "npm run build"
   },
   "dependencies": {
     "express": "^4.21.2",
@@ -162,5 +162,31 @@
     "@types/node": "^22.13.8",
     "@types/vscode": "^1.90.0",
     "typescript": "^5.7.3"
-  }
+  },
+  "main": "./dist/extension.js",
+  "license": "MIT",
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "relay",
+    "tasks",
+    "slack",
+    "github",
+    "workflow",
+    "project-management"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mayank-jain632/Relay.git"
+  },
+  "bugs": {
+    "url": "https://github.com/mayank-jain632/Relay/issues"
+  },
+  "homepage": "https://github.com/mayank-jain632/Relay#readme",
+  "files": [
+    "dist",
+    "resources",
+    "README.md"
+  ]
 }

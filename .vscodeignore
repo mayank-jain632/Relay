@@ -1,4 +1,5 @@
-.vscode/**
-server/**
-**/*.test.*
-**/tsconfig.json
+**
+!dist/**
+!resources/**
+!package.json
+!README.md
