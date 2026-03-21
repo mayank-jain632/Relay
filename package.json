@@ -1,9 +1,10 @@
 {
-  "name": "relay",
+  "name": "relay-tasks",
   "displayName": "Relay",
   "description": "Turn Slack conversations into executable tasks inside VS Code.",
-  "publisher": "relay-dev",
+  "publisher": "Relay",
   "version": "1.0.0",
+  "icon": "resources/icon.png",
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -17,7 +18,7 @@
         {
           "id": "contexthud",
           "title": "Relay",
-          "icon": "resources/icon.svg"
+          "icon": "resources/icon.png"
         }
       ]
     },

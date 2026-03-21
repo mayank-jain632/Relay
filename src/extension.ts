@@ -598,14 +598,6 @@ function updateSidebarAuthState(sidebar: SidebarProvider): void {
 
 async function refreshAuthState(context: vscode.ExtensionContext, sidebar: SidebarProvider): Promise<void> {
   try {
-    if (!configReady) {
-      authUser = undefined;
-      authRequired = true;
-      taskScope = 'all';
-      updateSidebarAuthState(sidebar);
-      return;
-    }
-
     const me = await fetchMe();
     authUser = me;
     authRequired = false;
@@ -631,13 +623,6 @@ async function refreshAuthState(context: vscode.ExtensionContext, sidebar: Sideb
 async function startLoginFlow(context: vscode.ExtensionContext, sidebar: SidebarProvider): Promise<void> {
   if (loginInProgress) {
     return;
-  }
-
-  if (!configReady) {
-    await loadRepoConfig(sidebar, { interactive: true });
-    if (!configReady) {
-      return;
-    }
   }
 
   loginInProgress = true;

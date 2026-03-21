@@ -1782,7 +1782,7 @@ function createApp() {
       if (consumedByUserId) {
         const alreadyMember = await isProjectMember(consumed.projectId, consumedByUserId);
         if (!alreadyMember) {
-          const allowAutoAdd = asBoolean(process.env.PAIR_CODE_AUTO_ADD_MEMBER, false);
+          const allowAutoAdd = asBoolean(process.env.PAIR_CODE_AUTO_ADD_MEMBER, true);
           if (!allowAutoAdd) {
             return res.status(403).json({
               error: 'Not a project member. Ask the workspace owner for an invite link first.'
