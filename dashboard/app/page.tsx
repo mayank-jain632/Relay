@@ -1,4 +1,6 @@
+import Image from 'next/image';
 import Link from 'next/link';
+import { LandingReveal } from '@/components/LandingReveal';
 
 const howItWorks = [
   {
@@ -46,6 +48,13 @@ const proofPoints = [
 export default function HomePage() {
   return (
     <main className="landing-page">
+      <div className="landing-background" aria-hidden="true">
+        <div className="landing-grid" />
+        <div className="landing-orb landing-orb-a" />
+        <div className="landing-orb landing-orb-b" />
+        <div className="landing-orb landing-orb-c" />
+      </div>
+
       <header className="landing-nav">
         <Link href="/" className="landing-brand" aria-label="Relay home">
           <span className="landing-brand-mark" />
@@ -60,7 +69,7 @@ export default function HomePage() {
       </header>
 
       <section className="landing-hero">
-        <div className="landing-hero-copy">
+        <LandingReveal className="landing-hero-copy" delay={40}>
           <div className="landing-kicker">Slack to merged PR, without losing the thread.</div>
           <h1 className="landing-title">From Slack message to merged PR, inside the editor.</h1>
           <p className="landing-subtitle">
@@ -87,113 +96,78 @@ export default function HomePage() {
             <span className="landing-proof-pill">VS Code workflow</span>
             <span className="landing-proof-pill">GitHub execution loop</span>
           </div>
-        </div>
+        </LandingReveal>
 
-        <div className="landing-hero-visual">
-          <div className="product-frame">
-            <div className="product-frame-bar">
-              <div className="product-frame-dots">
-                <span />
-                <span />
-                <span />
-              </div>
-              <div className="product-frame-title">Relay product demo</div>
+        <LandingReveal className="landing-hero-visual" delay={120}>
+          <div className="product-demo-shell">
+            <div className="product-demo-topline">
+              <span className="product-demo-chip">10-second workflow demo</span>
+              <span className="product-demo-caption">Slack request → VS Code task → PR ready</span>
             </div>
-
-            <div className="product-frame-body">
-              <aside className="product-sidebar">
-                <div className="product-sidebar-title">Relay</div>
-                <div className="product-sidebar-section">My Tasks</div>
-                <div className="product-task-card active">
-                  <div className="product-task-title">Fix retry logic</div>
-                  <div className="product-task-meta">In review · GitHub linked</div>
-                </div>
-                <div className="product-task-card">
-                  <div className="product-task-title">Ship billing alerts</div>
-                  <div className="product-task-meta">Todo · From Slack</div>
-                </div>
-              </aside>
-
-              <section className="product-main">
-                <div className="product-slack-row">
-                  <span className="product-badge">Slack</span>
-                  <span className="product-slack-text">/nudge @mayank Fix retry logic before Friday</span>
-                </div>
-
-                <div className="product-flow-grid">
-                  <div className="product-flow-step">
-                    <div className="product-flow-label">Task</div>
-                    <div className="product-flow-value">Appears instantly in the VS Code sidebar</div>
-                  </div>
-                  <div className="product-flow-step">
-                    <div className="product-flow-label">Start</div>
-                    <div className="product-flow-value">Creates branch ch/482-fix-retry-logic</div>
-                  </div>
-                  <div className="product-flow-step">
-                    <div className="product-flow-label">PR</div>
-                    <div className="product-flow-value">Moves to review and updates the team</div>
-                  </div>
-                </div>
-
-                <div className="product-demo-note">
-                  Drop a 10-second GIF or Loom capture into this frame later. The hero is already sized to convert well
-                  once the real demo asset is ready.
-                </div>
-              </section>
+            <div className="product-demo-frame">
+              <Image
+                src="/relay-demo.gif"
+                alt="Relay demo showing a Slack task arriving in Relay, then moving into a VS Code workflow and PR flow"
+                width={1280}
+                height={860}
+                className="product-demo-image"
+                unoptimized
+                priority
+              />
             </div>
           </div>
-        </div>
+        </LandingReveal>
       </section>
 
-      <section className="landing-section">
+      <LandingReveal className="landing-section" delay={20}>
         <div className="landing-section-header">
           <h2>How it works</h2>
           <p>Relay stays close to the tools engineering already uses instead of forcing work into another disconnected app.</p>
         </div>
         <div className="landing-steps-grid">
-          {howItWorks.map((step) => (
-            <article key={step.icon} className="landing-step-card">
+          {howItWorks.map((step, index) => (
+            <LandingReveal key={step.icon} className="landing-step-card" delay={index * 80}>
               <div className="landing-step-icon">{step.icon}</div>
               <h3>{step.title}</h3>
               <p>{step.description}</p>
-            </article>
+            </LandingReveal>
           ))}
         </div>
-      </section>
+      </LandingReveal>
 
-      <section className="landing-section">
+      <LandingReveal className="landing-section" delay={20}>
         <div className="landing-section-header">
           <h2>Feature highlights</h2>
           <p>Built around the actual execution layer between PMs, Slack, GitHub, and VS Code.</p>
         </div>
         <div className="landing-feature-grid">
-          {features.map((feature) => (
-            <article key={feature.title} className="landing-feature-card">
+          {features.map((feature, index) => (
+            <LandingReveal key={feature.title} className="landing-feature-card" delay={index * 70}>
               <h3>{feature.title}</h3>
               <p>{feature.description}</p>
-            </article>
+            </LandingReveal>
           ))}
         </div>
-      </section>
+      </LandingReveal>
 
-      <section className="landing-section">
+      <LandingReveal className="landing-section" delay={20}>
         <div className="landing-quote-card">
           <div>
             <div className="landing-kicker">Built for dev teams who live in Slack</div>
             <h2>Relay closes the gap between a request and the code that ships.</h2>
           </div>
           <div className="landing-proof-list">
-            {proofPoints.map((point) => (
-              <div key={point} className="landing-proof-row">
+            {proofPoints.map((point, index) => (
+              <LandingReveal key={point} className="landing-proof-row" delay={index * 70}>
                 <span className="landing-proof-dot" />
                 <span>{point}</span>
-              </div>
+              </LandingReveal>
             ))}
           </div>
         </div>
-      </section>
+      </LandingReveal>
 
-      <section className="landing-final-cta">
+      <LandingReveal className="landing-final-cta" delay={40}>
         <div>
           <div className="landing-kicker">Ready to stop losing tasks in Slack?</div>
           <h2>Bring requests, execution, and review into one Relay workflow.</h2>
@@ -201,7 +175,7 @@ export default function HomePage() {
         <Link className="button-primary landing-cta-primary" href="/login">
           Get Started
         </Link>
-      </section>
+      </LandingReveal>
 
       <footer className="landing-footer">
         <span>Relay</span>
