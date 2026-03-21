@@ -137,6 +137,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     void signOut(context, sidebar, true);
   });
 
+  sidebar.setOnLinkWorkspace(() => {
+    void linkWorkspaceByPairCode(context, sidebar);
+  });
+
   sidebar.setOnCreateTask(() => {
     void createTaskFromExtension(sidebar);
   });
@@ -465,13 +469,22 @@ async function linkWorkspaceByPairCode(context: vscode.ExtensionContext, sidebar
     updateSidebarProjectContext(sidebar);
     await refreshProjectDirectory(sidebar);
     refreshBackoffMs = 5000;
-    await signOut(context, sidebar, false);
-    if (previousProjectId && previousProjectId !== config.projectId) {
-      void vscode.window.showInformationMessage("Workspace switched. Sign in with GitHub for this project to load My Tasks.");
-    } else {
-      void vscode.window.showInformationMessage(`Relay linked to project ${config.projectId}. Sign in with GitHub to continue.`);
+    await refreshAuthState(context, sidebar);
+
+    if (authUser) {
+      const projectLabel = currentProjectName || config.projectId;
+      if (previousProjectId && previousProjectId !== config.projectId) {
+        void vscode.window.showInformationMessage(`Workspace switched to ${projectLabel}.`);
+      } else {
+        void vscode.window.showInformationMessage(`Relay linked to ${projectLabel}.`);
+      }
+      await refreshTasks(sidebar, { interactive: true });
+      return;
     }
-    await refreshTasks(sidebar, { interactive: true });
+
+    currentTasks = [];
+    sidebar.updateTasks([]);
+    void vscode.window.showInformationMessage(`Relay linked to project ${config.projectId}. Sign in with GitHub when ready.`);
   } catch (error) {
     void vscode.window.showErrorMessage(`Relay link failed: ${String(error)}. Verify pair code and retry.`);
   }

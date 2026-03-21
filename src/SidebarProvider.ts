@@ -4,7 +4,7 @@ import { ProjectSummary, RelayUser, Task } from './shared/types';
 type SidebarScope = 'my' | 'all';
 
 interface SidebarMessage {
-  type: 'openTask' | 'signIn' | 'signOut' | 'createTask' | 'setScope' | 'setProject';
+  type: 'openTask' | 'signIn' | 'signOut' | 'linkWorkspace' | 'createTask' | 'setScope' | 'setProject';
   taskId?: string;
   scope?: SidebarScope;
   projectId?: string;
@@ -28,6 +28,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private onOpenTask?: (taskId: string) => void;
   private onSignIn?: () => void;
   private onSignOut?: () => void;
+  private onLinkWorkspace?: () => void;
   private onCreateTask?: () => void;
   private onSetScope?: (scope: SidebarScope) => void;
   private onSetProject?: (projectId: string) => void;
@@ -49,6 +50,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
   setOnSignOut(handler: () => void): void {
     this.onSignOut = handler;
+  }
+
+  setOnLinkWorkspace(handler: () => void): void {
+    this.onLinkWorkspace = handler;
   }
 
   setOnCreateTask(handler: () => void): void {
@@ -81,6 +86,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
       if (message.type === 'signOut' && this.onSignOut) {
         this.onSignOut();
+        return;
+      }
+
+      if (message.type === 'linkWorkspace' && this.onLinkWorkspace) {
+        this.onLinkWorkspace();
         return;
       }
 
@@ -300,7 +310,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       const projects = Array.isArray(state.availableProjects) ? state.availableProjects : [];
 
       if (!projectId) {
-        projectNode.innerHTML = '<div class="project-title">Project: not linked</div>';
+        projectNode.innerHTML = [
+          '<div class="project-title">Project: not linked</div>',
+          '<button id="linkWorkspace" class="btn" style="margin-top: 6px;">Link Code</button>'
+        ].join('');
+
+        const linkBtn = document.getElementById('linkWorkspace');
+        if (linkBtn) {
+          linkBtn.addEventListener('click', () => vscode.postMessage({ type: 'linkWorkspace' }));
+        }
         return;
       }
 
@@ -315,7 +333,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
             return '<option value="' + escapeHtml(id) + '"' + selected + '>' + escapeHtml(name) + '</option>';
           }).join(''),
           '</select>',
-          '<div class="sub">ID: ' + escapeHtml(projectId) + '</div>'
+          '<div class="sub">ID: ' + escapeHtml(projectId) + '</div>',
+          '<button id="linkWorkspace" class="btn" style="margin-top: 6px;">Link Code</button>'
         ].join('');
 
         const selector = document.getElementById('projectSelect');
@@ -329,13 +348,24 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           });
         }
 
+        const linkBtn = document.getElementById('linkWorkspace');
+        if (linkBtn) {
+          linkBtn.addEventListener('click', () => vscode.postMessage({ type: 'linkWorkspace' }));
+        }
+
         return;
       }
 
       projectNode.innerHTML = [
         '<div class="project-title">Project: ' + escapeHtml(projectName || projectId) + '</div>',
-        '<div class="sub">ID: ' + escapeHtml(projectId) + '</div>'
+        '<div class="sub">ID: ' + escapeHtml(projectId) + '</div>',
+        '<button id="linkWorkspace" class="btn" style="margin-top: 6px;">Link Code</button>'
       ].join('');
+
+      const linkBtn = document.getElementById('linkWorkspace');
+      if (linkBtn) {
+        linkBtn.addEventListener('click', () => vscode.postMessage({ type: 'linkWorkspace' }));
+      }
     }
 
     function renderTasks(tasks) {
