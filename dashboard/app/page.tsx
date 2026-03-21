@@ -1,6 +1,5 @@
 import Link from 'next/link';
 import { LandingReveal } from '@/components/LandingReveal';
-import { TechNetworkBackground } from '@/components/TechNetworkBackground';
 
 const howItWorks = [
   {
@@ -48,11 +47,6 @@ const proofPoints = [
 export default function HomePage() {
   return (
     <main className="landing-page">
-      <div className="landing-background" aria-hidden="true">
-        <div className="landing-grid" />
-        <TechNetworkBackground />
-      </div>
-
       <header className="landing-nav">
         <Link href="/" className="landing-brand" aria-label="Relay home">
           <span className="landing-brand-mark" />
