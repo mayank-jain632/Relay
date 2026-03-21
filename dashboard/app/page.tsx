@@ -1,6 +1,6 @@
-import Image from 'next/image';
 import Link from 'next/link';
 import { LandingReveal } from '@/components/LandingReveal';
+import { TechNetworkBackground } from '@/components/TechNetworkBackground';
 
 const howItWorks = [
   {
@@ -50,9 +50,7 @@ export default function HomePage() {
     <main className="landing-page">
       <div className="landing-background" aria-hidden="true">
         <div className="landing-grid" />
-        <div className="landing-orb landing-orb-a" />
-        <div className="landing-orb landing-orb-b" />
-        <div className="landing-orb landing-orb-c" />
+        <TechNetworkBackground />
       </div>
 
       <header className="landing-nav">
@@ -99,21 +97,55 @@ export default function HomePage() {
         </LandingReveal>
 
         <LandingReveal className="landing-hero-visual" delay={120}>
-          <div className="product-demo-shell">
-            <div className="product-demo-topline">
-              <span className="product-demo-chip">10-second workflow demo</span>
-              <span className="product-demo-caption">Slack request → VS Code task → PR ready</span>
+          <div className="product-frame">
+            <div className="product-frame-bar">
+              <div className="product-frame-dots">
+                <span />
+                <span />
+                <span />
+              </div>
+              <div className="product-frame-title">Relay inside VS Code</div>
             </div>
-            <div className="product-demo-frame">
-              <Image
-                src="/relay-demo.gif"
-                alt="Relay demo showing a Slack task arriving in Relay, then moving into a VS Code workflow and PR flow"
-                width={1280}
-                height={860}
-                className="product-demo-image"
-                unoptimized
-                priority
-              />
+
+            <div className="product-frame-body">
+              <aside className="product-sidebar">
+                <div className="product-sidebar-title">Relay</div>
+                <div className="product-sidebar-section">My Tasks</div>
+                <div className="product-task-card active">
+                  <div className="product-task-title">Fix retry logic</div>
+                  <div className="product-task-meta">In review · GitHub linked</div>
+                </div>
+                <div className="product-task-card">
+                  <div className="product-task-title">Ship billing alerts</div>
+                  <div className="product-task-meta">Todo · From Slack</div>
+                </div>
+              </aside>
+
+              <section className="product-main">
+                <div className="product-slack-row">
+                  <span className="product-badge">Slack</span>
+                  <span className="product-slack-text">/nudge @mayank Fix retry logic before Friday</span>
+                </div>
+
+                <div className="product-flow-grid">
+                  <div className="product-flow-step">
+                    <div className="product-flow-label">Task</div>
+                    <div className="product-flow-value">Appears instantly in the VS Code sidebar</div>
+                  </div>
+                  <div className="product-flow-step">
+                    <div className="product-flow-label">Start</div>
+                    <div className="product-flow-value">Creates branch ch/482-fix-retry-logic</div>
+                  </div>
+                  <div className="product-flow-step">
+                    <div className="product-flow-label">PR</div>
+                    <div className="product-flow-value">Moves to review and updates the team</div>
+                  </div>
+                </div>
+
+                <div className="product-demo-note">
+                  Relay keeps intake in Slack, execution in VS Code, and review state connected through GitHub.
+                </div>
+              </section>
             </div>
           </div>
         </LandingReveal>
